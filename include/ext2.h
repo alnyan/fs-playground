@@ -4,6 +4,9 @@
 #define EXT2_MAGIC      ((uint16_t) 0xEF53)
 
 #define EXT2_SBSIZ      1024
+#define EXT2_SBOFF      1024
+
+#define EXT2_ROOTINO    2
 
 #define EXT2_GOOD       ((uint16_t) 1)
 #define EXT2_BAD        ((uint16_t) 2)
@@ -11,6 +14,9 @@
 #define EXT2_EACT_IGN   ((uint16_t) 1)
 #define EXT2_EACT_REM   ((uint16_t) 2)
 #define EXT2_EACT_PAN   ((uint16_t) 3)
+
+#define EXT2_TYPE_REG   ((uint16_t) 0x8000)
+#define EXT2_TYPE_DIR   ((uint16_t) 0x4000)
 
 struct ext2_sb {
     uint32_t inode_count;
@@ -58,6 +64,55 @@ struct ext2_extsb {
     uint32_t journal_inode;
     uint32_t journal_dev;
     uint32_t orphan_inode_head;
+
+    // driver-specific info
+    uint32_t block_size;
+    struct ext2_grp_desc *block_group_descriptor_table;
 } __attribute__((packed));
+
+struct ext2_grp_desc {
+    uint32_t block_usage_bitmap_block;
+    uint32_t inode_usage_bitmap_block;
+    uint32_t inode_table_block;
+    uint16_t free_blocks;
+    uint16_t free_inodes;
+    uint16_t dir_count;
+    char __pad[14];
+} __attribute__((packed));
+
+struct ext2_inode {
+    uint16_t type_perm;
+    uint16_t uid;
+    uint32_t size_lower;
+    uint32_t atime;
+    uint32_t ctime;
+    uint32_t mtime;
+    uint32_t dtime;
+    uint16_t gid;
+    uint16_t hard_link_count;
+    uint32_t disk_sector_count;
+    uint32_t flags;
+    uint32_t os_value_1;
+    uint32_t direct_blocks[12];
+    uint32_t l1_indirect_block;
+    uint32_t l2_indirect_block;
+    uint32_t l3_indirect_block;
+    uint32_t gen_number;
+    uint32_t acl;
+    union {
+        uint32_t dir_acl;
+        uint32_t size_upper;
+    };
+    uint32_t frag_block_addr;
+    char os_value_2[12];
+} __attribute__((packed));
+
+struct ext2_dirent {
+    uint32_t ino;
+    uint16_t len;
+    uint8_t name_len;
+    uint8_t type_ind;
+    char name[];
+};
 
 void ext2_class_init(void);

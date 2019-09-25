@@ -3,6 +3,8 @@ SRC=test.c \
 	vfs.c \
 	ext2.c \
 	fs_class.c \
+	testblk.c \
+	blk.c \
 	node.c
 
 all:

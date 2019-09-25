@@ -1,5 +1,6 @@
 #pragma once
 #include "node.h"
+#include "blk.h"
 
 struct fs_class {
     char name[256];
@@ -18,7 +19,7 @@ struct fs {
     vnode_t *mnt_at;
 
     // Block device on which the filesystem resides
-    void *blkdev;
+    struct blkdev *blk;
 
     // Private data structure per-mount
     void *fs_private;
@@ -26,7 +27,7 @@ struct fs {
     struct fs_class *cls;
 };
 
-struct fs *fs_create(struct fs_class *cls, void *blkdev, vnode_t *mnt_at);
+struct fs *fs_create(struct fs_class *cls, struct blkdev *blk, vnode_t *mnt_at);
 void fs_release(struct fs *fs);
 struct fs_class *fs_class_by_name(const char *name);
 int fs_class_register(struct fs_class *cls);
