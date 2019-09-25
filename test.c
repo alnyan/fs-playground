@@ -3,6 +3,21 @@
 #include "pseudofs.h"
 #include "ext2.h"
 
+#include <errno.h>
+
+static const char *errno_str(int r) {
+    switch (r) {
+        case -ENOENT:
+            return "No such file or directory";
+        case -EINVAL:
+            return "Invalid argument";
+        case -EROFS:
+            return "Read-only filesystem";
+        default:
+            return "Unknown error";
+    }
+}
+
 int main() {
     int res;
     struct ofile fd0;
@@ -20,26 +35,31 @@ int main() {
     }
 
     // Lookup etc/file1.txt in root
-    if ((res = vfs_find(NULL, "a", &file1)) != 0) {
-        fprintf(stderr, "File not found\n");
+    if ((res = vfs_creat(&fd0, "/b", 0644,  O_CREAT | O_WRONLY)) != 0) {
+        fprintf(stderr, "Failed to open file for reading: %s\n", errno_str(res));
         return -1;
     }
 
-    // Open a descriptor using the file
-    if ((res = vfs_open(&fd0, file1, O_RDONLY)) != 0) {
-        fprintf(stderr, "Failed to open file for reading\n");
+    // Perform a write
+    if ((res = vfs_write(&fd0, "value", 5)) < 0) {
+        fprintf(stderr, "Failed to write to the file: %s\n", errno_str(res));
         return -1;
     }
-
-    // Perform a read
-    if ((res = vfs_read(&fd0, buf, sizeof(buf))) < 0) {
-        fprintf(stderr, "Failed to read from the file\n");
-        return -1;
-    }
-    buf[res - 1] = 0;
-    printf("Data: %s\n", buf);
 
     // Close the fd
+    vfs_close(&fd0);
+
+    // Now try to open the file for reading
+    if ((res = vfs_open(&fd0, "/b", 0, O_RDONLY)) != 0) {
+        fprintf(stderr, "Failed to open file for reading: %s\n", errno_str(res));
+    }
+
+    if ((res = vfs_read(&fd0, buf, sizeof(buf))) < 0) {
+        fprintf(stderr, "Failed to read file: %s\n", errno_str(res));
+    }
+
+    printf("Data: %s\n", buf);
+
     vfs_close(&fd0);
 
     vfs_dump_tree();

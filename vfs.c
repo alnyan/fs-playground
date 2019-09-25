@@ -47,6 +47,7 @@ void vfs_node_free(struct vfs_node *node) {
 struct vfs_node *vfs_node_create(const char *name, vnode_t *vn) {
     assert(vn);
     struct vfs_node *node = (struct vfs_node *) malloc(sizeof(struct vfs_node));
+    vn->refcount = 0;
     vn->tree_node = node;
     node->vnode = vn;
     strcpy(node->name, name);
@@ -61,9 +62,11 @@ struct vfs_node *vfs_node_create(const char *name, vnode_t *vn) {
  *        on VFS path tree instead of vnodes (as they have no hierarchy defined)
  */
 static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vfs_node **res_node) {
-    // Path cannot be null
-    // TODO: maybe it can - just return the root node itself
-    assert(path);
+    if (!path || !*path) {
+        // The path refers to the node itself
+        *res_node = root_node;
+        return 0;
+    }
 
     // Assuming the path is normalized
     char path_element[256];
@@ -114,7 +117,6 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
 
         // 3.3. Found some vnode, attach it to the VFS tree
         child_node = vfs_node_create(path_element, child_vnode);
-        child_vnode->refcount = 0;
 
         // Prepend it to parent's child list
         child_node->parent = root_node;
@@ -152,6 +154,10 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
 int vfs_find(vnode_t *root_vnode, const char *path, vnode_t **res_vnode) {
     struct vfs_node *res_node = NULL;
     int res;
+
+    while (*path == '/') {
+        ++path;
+    }
 
     if (!root_vnode) {
         // Root node contains no vnode - which means there's no root
@@ -260,9 +266,127 @@ int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
     return 0;
 }
 
-int vfs_open(struct ofile *of, vnode_t *vn, int opt) {
+static void vfs_path_parent(char *dst, const char *path) {
+    // The function expects normalized paths without . and ..
+    // Possible inputs:
+    //  "/" -> "/"
+    //  "/dir/x/y" -> "/dir/x"
+
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        dst[0] = '/';
+        dst[1] = 0;
+        return;
+    }
+
+    strncpy(dst, path, slash - path);
+    dst[slash - path] = 0;
+}
+
+static const char *vfs_path_basename(const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        return NULL;
+    }
+
+    return slash + 1;
+}
+
+static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, vnode_t **resvn) {
+    // Create a file without opening it
+    assert(at && at->op && at->tree_node);
+    int res;
+
+    if (!at->op->creat) {
+        return -EROFS;
+    }
+
+    if ((res = at->op->creat(at, name, mode, opt, resvn)) != 0) {
+        return res;
+    }
+
+    struct vfs_node *parent_node = at->tree_node;
+    struct vfs_node *child_node = vfs_node_create(name, *resvn);
+
+    // Prepend it to parent's child list
+    child_node->parent = parent_node;
+    child_node->cdr = parent_node->child;
+    parent_node->child = child_node;
+    vnode_ref(at);
+
+    return 0;
+}
+
+int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
+    // Get parent vnode
+    char parent_path[1024];
+    vfs_path_parent(parent_path, path);
+    vnode_t *parent_vnode = NULL;
+    vnode_t *vnode = NULL;
+    int res;
+
+    if ((res = vfs_find(NULL, parent_path, &parent_vnode)) != 0) {
+        printf("Parent does not exist: %s\n", parent_path);
+        // Parent doesn't exist, too - error
+        return res;
+    }
+
+    if (parent_vnode->type != VN_DIR) {
+        // Parent is not a directory
+        return -ENOENT;
+    }
+
+    path = vfs_path_basename(path);
+
+    if (!path) {
+        return -EINVAL;
+    }
+
+    if ((res = vfs_creat_internal(parent_vnode, path, mode, opt & ~O_CREAT, &vnode)) != 0) {
+        // Could not create entry
+        return res;
+    }
+
+    return vfs_open_node(of, vnode, opt & ~O_CREAT);
+}
+
+int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
+    assert(of);
+    // Try to find the file
+    int res;
+    vnode_t *vnode = NULL;
+
+    // TODO: normalize path
+
+    if ((res = vfs_find(NULL, path, &vnode)) != 0) {
+        if (!(opt & O_CREAT)) {
+            return -ENOENT;
+        }
+
+        return vfs_creat(of, path, mode, opt);
+    }
+
+    return vfs_open_node(of, vnode, opt & ~O_CREAT);
+}
+
+int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     assert(vn && vn->op && of);
     int res;
+
+
+    // Check flag sanity
+    // Can't have O_CREAT here
+    if (opt & O_CREAT) {
+        return -EINVAL;
+    }
+    // Can't be both (RD|WR) and EX
+    if (opt & O_EXEC) {
+        if (opt & O_RDWR) {
+            return -EINVAL;
+        }
+    }
+
+    // TODO: check permissions here
 
     if (vn->op->open) {
         if ((res = vn->op->open(vn, opt)) != 0) {
@@ -275,7 +399,6 @@ int vfs_open(struct ofile *of, vnode_t *vn, int opt) {
     of->pos = 0;
 
     vnode_ref(vn);
-
     return 0;
 }
 
@@ -296,11 +419,35 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
+    if (!(fd->mode & O_RDONLY)) {
+        return -EINVAL;
+    }
     if (vn->op->read == NULL) {
         return -EINVAL;
     }
 
     ssize_t nr = vn->op->read(fd, buf, count);
+
+    if (nr > 0) {
+        fd->pos += nr;
+    }
+
+    return nr;
+}
+
+ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
+    assert(fd);
+    vnode_t *vn = fd->vnode;
+    assert(vn && vn->op);
+
+    if (!(fd->mode & O_WRONLY)) {
+        return -EINVAL;
+    }
+    if (vn->op->write == NULL) {
+        return -EINVAL;
+    }
+
+    ssize_t nr = vn->op->write(fd, buf, count);
 
     if (nr > 0) {
         fd->pos += nr;

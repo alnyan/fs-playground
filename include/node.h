@@ -10,6 +10,7 @@
 #define O_WRONLY    (1 << 1)
 #define O_RDWR      (O_RDONLY | O_WRONLY)
 #define O_EXEC      (1 << 2)
+#define O_CREAT     (1 << 15)
 
 struct ofile;
 typedef struct vnode vnode_t;
@@ -18,7 +19,9 @@ typedef struct fs fs_t;
 enum vnode_type {
     VN_REG,
     VN_DIR,
-    VN_MNT
+    VN_MNT,
+    VN_BLK,
+    VN_CHR
 };
 
 /**
@@ -29,10 +32,14 @@ struct vnode_operations {
     int (*find) (vnode_t *node, const char *path, vnode_t **res);
     void (*destroy) (vnode_t *node);
 
+    // File entry operations
+    int (*creat) (vnode_t *node, const char *name, int mode, int opt, vnode_t **res);
+
     // File access
     int (*open) (vnode_t *node, int opt);
     void (*close) (struct ofile *fd);
     ssize_t (*read) (struct ofile *fd, void *buf, size_t count);
+    ssize_t (*write) (struct ofile *fd, const void *buf, size_t count);
 };
 
 struct vnode {
