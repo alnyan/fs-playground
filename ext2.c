@@ -15,9 +15,11 @@
 static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **resvn);
 static int ext2_vnode_open(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
+static void ext2_vnode_destroy(vnode_t *vn);
 
 static struct vnode_operations ext2_vnode_ops = {
     .find = ext2_vnode_find,
+    .destroy = ext2_vnode_destroy,
 
     .open = ext2_vnode_open,
     .read = ext2_vnode_read
@@ -277,4 +279,9 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
     }
 
     return nread;
+}
+
+static void ext2_vnode_destroy(vnode_t *vn) {
+    // Release inode struct
+    free(vn->fs_data);
 }
