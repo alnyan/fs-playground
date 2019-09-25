@@ -57,8 +57,21 @@ static int ext2_read_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t 
         uint32_t block_number = inode->direct_blocks[index];
         return ext2_read_block(ext2, block_number, buf);
     } else {
-        // NYI
-        abort();
+        struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+        // Use buf as indirection block buffer (I think we're allowed to do so)
+
+        if (index < 12 + (sb->block_size / 4)) {
+            // Single indirection
+            if (ext2_read_block(ext2, inode->l1_indirect_block, buf) < 0) {
+                return -EIO;
+            }
+
+            uint32_t block_number = ((uint32_t *) buf)[index - 12];
+            return ext2_read_block(ext2, block_number, buf);
+        } else {
+            // Not implemented yet
+            return -EIO;
+        }
     }
 }
 
@@ -150,6 +163,11 @@ static int ext2_fs_mount(fs_t *fs, const char *opt) {
 }
 
 static int ext2_fs_umount(fs_t *fs) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) fs->fs_private;
+    // Free block group descriptor table
+    free(sb->block_group_descriptor_table);
+    // Free superblock
+    free(sb);
     return 0;
 }
 
@@ -270,12 +288,16 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
     char block_buffer[sb->block_size];
 
     for (size_t i = 0; i < nblocks; ++i) {
-        if (ext2_read_inode_block(vn->fs, inode, i, block_buffer) < 0) {
+        if (ext2_read_inode_block(vn->fs, inode, i + block_number, block_buffer) < 0) {
             return -EIO;
         }
-
-        size_t ncpy = MIN(sb->block_size, nread - sb->block_size * i);
-        memcpy(buf + sb->block_size * i, block_buffer, ncpy);
+        if (i == 0) {
+            size_t ncpy = MIN(sb->block_size - fd->pos % sb->block_size, nread);
+            memcpy(buf, block_buffer + fd->pos % sb->block_size, ncpy);
+        } else {
+            size_t ncpy = MIN(sb->block_size, nread - sb->block_size * i);
+            memcpy(buf + sb->block_size * i, block_buffer, ncpy);
+        }
     }
 
     return nread;

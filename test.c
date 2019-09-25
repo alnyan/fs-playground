@@ -24,7 +24,7 @@ int main() {
     int res;
     struct ofile fd0;
     vnode_t *file1;
-    char buf[1024];
+    char buf[513];
 
     vfs_init();
     ext2_class_init();
@@ -35,24 +35,27 @@ int main() {
         return -1;
     }
 
-    if ((res = vfs_open(&fd0, "test.txt", 0, O_RDONLY)) != 0) {
+    if ((res = vfs_open(&fd0, "a/b.txt", 0, O_RDONLY)) != 0) {
         fprintf(stderr, "test.txt: %s\n", errno_str(res));
         return -1;
     }
 
-    if ((res = vfs_read(&fd0, buf, sizeof(buf))) < 0) {
-        fprintf(stderr, "test.txt read: %s\n", errno_str(res));
-        return -1;
+    size_t bread_total = 0;
+    while ((res = vfs_read(&fd0, buf, sizeof(buf) - 1)) > 0) {
+        printf("%d bytes\n", res);
+        buf[res] = 0;
+        printf("READ DATA\n%s\n", buf);
+        bread_total += res;
     }
-    printf("Read %d bytes\n", res);
-
-    buf[1023] = 0;
-
-    printf("File content:\n%s\n", buf);
+    printf("Total: %zu\n", bread_total);
 
     vfs_close(&fd0);
 
     vfs_dump_tree();
+
+    // Cleanup
+    vfs_umount(NULL);
+    testblk_dev.destroy(&testblk_dev);
 
     return 0;
 }

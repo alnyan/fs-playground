@@ -266,6 +266,28 @@ int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
     return 0;
 }
 
+int vfs_umount(vnode_t *at) {
+    if (!at) {
+        if (!root_node.vnode) {
+            return -ENOENT;
+        }
+
+        assert(!root_node.child);
+
+        // Only works for root node
+        assert(root_node.vnode->fs && root_node.vnode->fs->cls);
+        int res = root_node.vnode->fs->cls->umount(root_node.vnode->fs);
+        root_node.vnode->refcount = 0;
+        vnode_free(root_node.vnode);
+        root_node.vnode = NULL;
+        return res;
+    } else {
+        // TODO: support non-root mounts
+        abort();
+    }
+    return 0;
+}
+
 static void vfs_path_parent(char *dst, const char *path) {
     // The function expects normalized paths without . and ..
     // Possible inputs:

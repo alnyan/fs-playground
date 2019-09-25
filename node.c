@@ -8,7 +8,9 @@
 static void vfs_node_remove(struct vfs_node *node) {
     // If node->parent == NULL, we've called this
     // function on [root], which should not be possible
-    assert(node && node->parent);
+    if (!node || !node->parent) {
+        return;
+    }
 
     struct vfs_node *parent = node->parent;
 

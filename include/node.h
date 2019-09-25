@@ -58,3 +58,4 @@ struct vnode {
 
 void vnode_ref(vnode_t *vn);
 void vnode_unref(vnode_t *vn);
+void vnode_free(vnode_t *vn);
