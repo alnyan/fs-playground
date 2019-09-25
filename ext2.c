@@ -16,10 +16,13 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **resvn);
 static int ext2_vnode_open(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
 static void ext2_vnode_destroy(vnode_t *vn);
+static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
 
 static struct vnode_operations ext2_vnode_ops = {
     .find = ext2_vnode_find,
     .destroy = ext2_vnode_destroy,
+
+    .stat = ext2_vnode_stat,
 
     .open = ext2_vnode_open,
     .read = ext2_vnode_read
@@ -186,6 +189,7 @@ static vnode_t *ext2_fs_get_root(fs_t *fs) {
 
     res->fs = fs;
     res->fs_data = inode;
+    res->fs_number = EXT2_ROOTINO;
     res->op = &ext2_vnode_ops;
     res->type = ext2_inode_type(inode);
 
@@ -243,6 +247,7 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
                     }
 
                     out->fs_data = result_inode;
+                    out->fs_number = dirent->ino;
                     out->type = ext2_inode_type(result_inode);
 
                     *res = out;
@@ -306,4 +311,28 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
 static void ext2_vnode_destroy(vnode_t *vn) {
     // Release inode struct
     free(vn->fs_data);
+}
+
+static int ext2_vnode_stat(vnode_t *vn, struct stat *st) {
+    assert(vn && vn->fs);
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+    assert(inode);
+    struct ext2_extsb *sb = (struct ext2_extsb *) vn->fs->fs_private;
+    assert(sb);
+
+    st->st_atime = inode->atime;
+    st->st_ctime = inode->ctime;
+    st->st_mtime = inode->mtime;
+    st->st_dev = 0;     // Not implemented
+    st->st_rdev = 0;    // Not implemented
+    st->st_gid = inode->gid;
+    st->st_uid = inode->uid;
+    st->st_mode = inode->type_perm;
+    st->st_size = inode->size_lower;
+    st->st_blocks = (inode->size_lower + sb->block_size - 1) / sb->block_size;
+    st->st_blksize = sb->block_size;
+    st->st_nlink = 0;
+    st->st_ino = vn->fs_number;
+
+    return 0;
 }

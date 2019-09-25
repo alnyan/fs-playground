@@ -436,6 +436,27 @@ void vfs_close(struct ofile *of) {
     vnode_unref(of->vnode);
 }
 
+int vfs_stat(const char *path, struct stat *st) {
+    assert(path && st);
+    vnode_t *vnode;
+    int res;
+
+    if ((res = vfs_find(NULL, path, &vnode)) != 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+
+    if (!vnode->op || !vnode->op->stat) {
+        res = -EINVAL;
+    } else {
+        res = vnode->op->stat(vnode, st);
+    }
+
+    vnode_unref(vnode);
+    return res;
+}
+
 ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     assert(fd);
     vnode_t *vn = fd->vnode;

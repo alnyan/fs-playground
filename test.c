@@ -20,9 +20,34 @@ static const char *errno_str(int r) {
     }
 }
 
+static void dumpstat(char *buf, const struct stat *st) {
+    char t = '-';
+
+    switch (st->st_mode & S_IFMT) {
+    case S_IFDIR:
+        t = 'd';
+        break;
+    }
+
+    sprintf(buf, "%c%c%c%c%c%c%c%c%c%c % 5d % 5d %u", t,
+        (st->st_mode & S_IRUSR) ? 'r' : '-',
+        (st->st_mode & S_IWUSR) ? 'w' : '-',
+        (st->st_mode & S_IXUSR) ? 'x' : '-',
+        (st->st_mode & S_IRGRP) ? 'r' : '-',
+        (st->st_mode & S_IWGRP) ? 'w' : '-',
+        (st->st_mode & S_IXGRP) ? 'x' : '-',
+        (st->st_mode & S_IROTH) ? 'r' : '-',
+        (st->st_mode & S_IWOTH) ? 'w' : '-',
+        (st->st_mode & S_IXOTH) ? 'x' : '-',
+        st->st_uid,
+        st->st_gid,
+        st->st_size);
+}
+
 int main() {
     int res;
     struct ofile fd0;
+    struct stat st0;
     vnode_t *file1;
     char buf[513];
 
@@ -50,6 +75,21 @@ int main() {
     printf("Total: %zu\n", bread_total);
 
     vfs_close(&fd0);
+
+    printf("stat test.txt\n");
+    if ((res = vfs_stat("test.txt", &st0)) != 0) {
+        fprintf(stderr, "stat(test.txt): %s\n", errno_str(res));
+        return -1;
+    }
+    dumpstat(buf, &st0);
+    printf("%s\t%s\n", buf, "test.txt");
+    printf("stat a\n");
+    if ((res = vfs_stat("a", &st0)) != 0) {
+        fprintf(stderr, "stat(a): %s\n", errno_str(res));
+        return -1;
+    }
+    dumpstat(buf, &st0);
+    printf("%s\t%s\n", buf, "a");
 
     vfs_dump_tree();
 

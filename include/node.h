@@ -5,6 +5,7 @@
 #pragma once
 #include <stdint.h>
 #include <sys/types.h>
+#include "stat.h"
 
 #define O_RDONLY    (1 << 0)
 #define O_WRONLY    (1 << 1)
@@ -34,6 +35,7 @@ struct vnode_operations {
 
     // File entry operations
     int (*creat) (vnode_t *node, const char *name, int mode, int opt, vnode_t **res);
+    int (*stat) (vnode_t *node, struct stat *st);
 
     // File access
     int (*open) (vnode_t *node, int opt);
@@ -48,7 +50,10 @@ struct vnode {
     uint32_t refcount;
 
     fs_t *fs;
+    // Private filesystem-specific data (like inode struct)
     void *fs_data;
+    // Private filesystem-specific number (like inode number)
+    uint32_t fs_number;
 
     void *tree_node;
     struct vnode *mnt;
