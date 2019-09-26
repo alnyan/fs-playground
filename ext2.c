@@ -205,7 +205,14 @@ static int ext2_alloc_block(fs_t *ext2, uint32_t *block_no) {
                         if (!(qw & (1 << k))) {
                             res_block_no_in_group = k + j * 64;
                             res_group_no = i;
-                            res_block_no = res_block_no_in_group + i * sb->sb.block_group_size_blocks;
+                            // XXX: had to increment the resulting block_no
+                            //      because for some reason linux's ext2
+                            //      impl hasn't marked #531 as used in one
+                            //      case, but it was actually a L1-indirect
+                            //      block. So I just had to make it allocate
+                            //      #532 instead as a workaround (though
+                            //      block numbering should start with 0)
+                            res_block_no = res_block_no_in_group + i * sb->sb.block_group_size_blocks + 1;
                             found = 1;
                             break;
                         }
@@ -251,6 +258,7 @@ static int ext2_alloc_block(fs_t *ext2, uint32_t *block_no) {
     }
 
     *block_no = res_block_no;
+    printf("Allocated block #%u\n", res_block_no);
     return 0;
 }
 
@@ -707,6 +715,7 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
 
     for (size_t i = 0; i < nblocks; ++i) {
         if (ext2_read_inode_block(vn->fs, inode, i + block_number, block_buffer) < 0) {
+            fprintf(stderr, "Failed to read inode %d block #%d\n", vn->fs_number, i + block_number);
             return -EIO;
         }
         if (i == 0) {
