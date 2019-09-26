@@ -14,7 +14,9 @@
 // Forward declaration of ext2 vnode functions
 static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **resvn);
 static int ext2_vnode_open(vnode_t *vn, int opt);
+static int ext2_vnode_opendir(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
+static int ext2_vnode_readdir(struct ofile *fd);
 static void ext2_vnode_destroy(vnode_t *vn);
 static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
 
@@ -23,6 +25,9 @@ static struct vnode_operations ext2_vnode_ops = {
     .destroy = ext2_vnode_destroy,
 
     .stat = ext2_vnode_stat,
+
+    .opendir = ext2_vnode_opendir,
+    .readdir = ext2_vnode_readdir,
 
     .open = ext2_vnode_open,
     .read = ext2_vnode_read
@@ -44,7 +49,7 @@ static int ext2_read_block(fs_t *ext2, uint32_t block_no, void *buf) {
     if (!block_no) {
         return -1;
     }
-    printf("ext2_read_block %u\n", block_no);
+    //printf("ext2_read_block %u\n", block_no);
     int res = blk_read(ext2->blk, buf, block_no * ext2_super(ext2)->block_size, ext2_super(ext2)->block_size);
 
     if (res < 0) {
@@ -80,19 +85,19 @@ static int ext2_read_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t 
 
 static int ext2_read_inode(fs_t *ext2, struct ext2_inode *inode, uint32_t ino) {
     struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
-    printf("ext2_read_inode %d\n", ino);
+    //printf("ext2_read_inode %d\n", ino);
     char inode_block_buffer[sb->block_size];
 
     uint32_t ino_block_group_number = (ino - 1) / sb->sb.block_group_size_inodes;
-    printf("inode block group number = %d\n", ino_block_group_number);
+    //printf("inode block group number = %d\n", ino_block_group_number);
     uint32_t ino_inode_table_block = sb->block_group_descriptor_table[ino_block_group_number].inode_table_block;
-    printf("inode table is at block %d\n", ino_inode_table_block);
+    //printf("inode table is at block %d\n", ino_inode_table_block);
     uint32_t ino_inode_index_in_group = (ino - 1) % sb->sb.block_group_size_inodes;
-    printf("inode entry index in the group = %d\n", ino_inode_index_in_group);
+    //printf("inode entry index in the group = %d\n", ino_inode_index_in_group);
     uint32_t ino_inode_block_in_group = (ino_inode_index_in_group * sb->inode_struct_size) / sb->block_size;
-    printf("inode entry offset is %d blocks\n", ino_inode_block_in_group);
+    //printf("inode entry offset is %d blocks\n", ino_inode_block_in_group);
     uint32_t ino_inode_block_number = ino_inode_block_in_group + ino_inode_table_block;
-    printf("inode block number is %uth block\n", ino_inode_block_number);
+    //printf("inode block number is %uth block\n", ino_inode_block_number);
 
     //struct ext2_inode *root_inode_block_inode_table = (struct ext2_inode *) root_inode_block_buf;
     if (ext2_read_block(ext2, ino_inode_block_number, inode_block_buffer) < 0) {
@@ -267,6 +272,11 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
     return -ENOENT;
 }
 
+static int ext2_vnode_opendir(vnode_t *vn, int opt) {
+    assert(vn->type == VN_DIR);
+    return 0;
+}
+
 static int ext2_vnode_open(vnode_t *vn, int opt) {
     // Writing is not yet implemented
     if (opt & O_WRONLY) {
@@ -307,6 +317,47 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
     }
 
     return nread;
+}
+
+// TODO: replace this with getdents
+static int ext2_vnode_readdir(struct ofile *fd) {
+    vnode_t *vn = fd->vnode;
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+    struct ext2_extsb *sb = vn->fs->fs_private;
+
+    if (fd->pos >= inode->size_lower) {
+        return -1;
+    }
+
+    size_t block_number = fd->pos / sb->block_size;
+    char block_buffer[sb->block_size];
+
+    if (ext2_read_inode_block(vn->fs, inode, block_number, block_buffer) < 0) {
+        return -EIO;
+    }
+
+    size_t block_offset = fd->pos % sb->block_size;
+    struct ext2_dirent *ext2dir = (struct ext2_dirent *) &block_buffer[block_offset];
+
+    if (ext2dir->len == 0) {
+        // If entry size is zero, guess we're finished - align the fd->pos up to block size
+        fd->pos = (fd->pos + sb->block_size - 1) / sb->block_size;
+        return -1;
+    }
+
+    struct dirent *vfsdir = (struct dirent *) fd->dirent_buf;
+
+    vfsdir->d_ino = ext2dir->ino;
+    strncpy(vfsdir->d_name, ext2dir->name, ext2dir->name_len);
+    vfsdir->d_name[ext2dir->name_len] = 0;
+    vfsdir->d_reclen = ext2dir->len;
+    vfsdir->d_type = ext2dir->type_ind;
+    // Not implemented, I guess
+    vfsdir->d_off = 0;
+
+    fd->pos += ext2dir->len;
+
+    return 0;
 }
 
 static void ext2_vnode_destroy(vnode_t *vn) {

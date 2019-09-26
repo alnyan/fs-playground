@@ -3,7 +3,9 @@
 #include <sys/types.h>
 
 struct ofile {
-    int mode;
+    int flags;
     vnode_t *vnode;
     size_t pos;
+    // Dirent buffer
+    char dirent_buf[512];
 };

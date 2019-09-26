@@ -408,6 +408,33 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     assert(vn && vn->op && of);
     int res;
 
+    if (opt & O_DIRECTORY) {
+        assert((opt & O_RDWR) == O_RDONLY);
+        assert(!(opt & O_CREAT));
+        vnode_ref(vn);
+
+        if (vn->type != VN_DIR && vn->type != VN_MNT) {
+            vnode_unref(vn);
+            return -ENOTDIR;
+        }
+
+        // opendir
+        if (vn->op->opendir) {
+            if ((res = vn->op->opendir(vn, opt)) != 0) {
+                vnode_unref(vn);
+                return res;
+            }
+        } else {
+            vnode_unref(vn);
+            return -EINVAL;
+        }
+
+        of->flags = opt;
+        of->vnode = vn;
+        of->pos = 0;
+
+        return res;
+    }
 
     // Check flag sanity
     // Can't have O_CREAT here
@@ -422,6 +449,9 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     }
 
     // TODO: check permissions here
+    if (vn->type == VN_DIR || vn->type == VN_MNT) {
+        return -EISDIR;
+    }
 
     if (vn->op->open) {
         if ((res = vn->op->open(vn, opt)) != 0) {
@@ -429,7 +459,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
         }
     }
 
-    of->mode = opt;
+    of->flags = opt;
     of->vnode = vn;
     of->pos = 0;
 
@@ -475,7 +505,10 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
-    if (!(fd->mode & O_RDONLY)) {
+    if (fd->flags & O_DIRECTORY) {
+        return -EISDIR;
+    }
+    if (!(fd->flags & O_RDONLY)) {
         return -EINVAL;
     }
     if (vn->op->read == NULL) {
@@ -496,7 +529,10 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
-    if (!(fd->mode & O_WRONLY)) {
+    if (fd->flags & O_DIRECTORY) {
+        return -EISDIR;
+    }
+    if (!(fd->flags & O_WRONLY)) {
         return -EINVAL;
     }
     if (vn->op->write == NULL) {
@@ -510,4 +546,23 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     }
 
     return nr;
+}
+
+struct dirent *vfs_readdir(struct ofile *fd) {
+    assert(fd);
+    if (!(fd->flags & O_DIRECTORY)) {
+        return NULL;
+    }
+    vnode_t *vn = fd->vnode;
+    assert(vn && vn->op);
+
+    if (!vn->op->readdir) {
+        return NULL;
+    }
+
+    if (vn->op->readdir(fd) == 0) {
+        return (struct dirent *) fd->dirent_buf;
+    }
+
+    return NULL;
 }

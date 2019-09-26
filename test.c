@@ -17,6 +17,10 @@ static const char *errno_str(int r) {
             return "Invalid argument";
         case -EROFS:
             return "Read-only filesystem";
+        case -ENOTDIR:
+            return "Not a directory";
+        case -EISDIR:
+            return "Is a directory";
         default:
             return "Unknown error";
     }
@@ -65,12 +69,30 @@ static int shell_tree(const char *arg) {
     return 0;
 }
 
+static int shell_ls(const char *arg) {
+    struct ofile fd;
+    int res = vfs_open(&fd, arg, 0, O_DIRECTORY | O_RDONLY);
+    if (res < 0) {
+        return res;
+    }
+
+    struct dirent *ent;
+    while ((ent = vfs_readdir(&fd))) {
+        printf("dirent %s\n", ent->d_name);
+    }
+
+    vfs_close(&fd);
+
+    return res;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
 } shell_cmds[] = {
     { "stat", shell_stat },
     { "tree", shell_tree },
+    { "ls", shell_ls },
 };
 
 static void shell(void) {

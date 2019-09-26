@@ -34,3 +34,4 @@ int vfs_open_node(struct ofile *fd, vnode_t *vn, int opt);
 void vfs_close(struct ofile *fd);
 ssize_t vfs_read(struct ofile *fd, void *buf, size_t count);
 ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count);
+struct dirent *vfs_readdir(struct ofile *fd);

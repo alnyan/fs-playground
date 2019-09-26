@@ -5,12 +5,14 @@
 #pragma once
 #include <stdint.h>
 #include <sys/types.h>
+#include "dirent.h"
 #include "stat.h"
 
 #define O_RDONLY    (1 << 0)
 #define O_WRONLY    (1 << 1)
 #define O_RDWR      (O_RDONLY | O_WRONLY)
 #define O_EXEC      (1 << 2)
+#define O_DIRECTORY (1 << 14)
 #define O_CREAT     (1 << 15)
 
 struct ofile;
@@ -34,8 +36,12 @@ struct vnode_operations {
     void (*destroy) (vnode_t *node);
 
     // File entry operations
-    int (*creat) (vnode_t *node, const char *name, int mode, int opt, vnode_t **res);
+    int (*creat) (vnode_t *node, const char *name, mode_t mode, int opt, vnode_t **res);
     int (*stat) (vnode_t *node, struct stat *st);
+
+    // Directory access
+    int (*opendir) (vnode_t *node, int opt);
+    int (*readdir) (struct ofile *fd);
 
     // File access
     int (*open) (vnode_t *node, int opt);
