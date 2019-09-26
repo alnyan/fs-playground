@@ -228,7 +228,14 @@ int main() {
     shell();
 
     // Cleanup
-    vfs_umount(NULL);
+    if ((res = vfs_umount("/a")) != 0) {
+        fprintf(stderr, "Failed to umount /a\n");
+        return -1;
+    }
+    if ((res = vfs_umount("/")) != 0) {
+        fprintf(stderr, "Failed to umount /\n");
+        return -1;
+    }
     testblk_dev.destroy(&testblk_dev);
 
     return 0;

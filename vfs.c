@@ -320,6 +320,12 @@ static int vfs_mount_internal(struct vfs_node *at, void *blkdev, const char *fs_
     vnode_t *fs_root;
     vnode_t *old_vnode = at->vnode;
 
+    if (at->child) {
+        // Target directory already has child nodes loaded in memory, return "busy"
+        // TODO: destroy fs
+        return -EBUSY;
+    }
+
     if (at->ismount) {
         // TODO: report error and destroy fs
         abort();
@@ -369,25 +375,45 @@ int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char 
     return vfs_mount_internal(mount_at, blkdev, fs_name, opt);
 }
 
-int vfs_umount(vnode_t *at) {
-    if (!at) {
-        if (!root_node.vnode) {
-            return -ENOENT;
-        }
-
-        assert(!root_node.child);
-
-        // Only works for root node
-        assert(root_node.vnode->fs && root_node.vnode->fs->cls);
-        int res = root_node.vnode->fs->cls->umount(root_node.vnode->fs);
-        root_node.vnode->refcount = 0;
-        vnode_free(root_node.vnode);
-        root_node.vnode = NULL;
-        return res;
-    } else {
-        // TODO: support non-root mounts
-        abort();
+int vfs_umount(const char *target) {
+    if (!root_node.vnode) {
+        // No root, don't even bother umounting anything
+        return -ENOENT;
     }
+
+    // Lookup target vnode's tree_node
+    assert(target);
+    vnode_t *at_vnode;
+    struct vfs_node *at;
+    int res;
+
+    if ((res = vfs_find(cwd_vnode, target, &at_vnode)) != 0) {
+        return res;
+    }
+
+    at = at_vnode->tree_node;
+    assert(at);
+
+    if (!at->ismount) {
+        // Not mounted
+        return -EINVAL;
+    }
+
+    if (at->child) {
+        // There're some used vnodes down the tree
+        return -EBUSY;
+    }
+
+    at->vnode = at->real_vnode;
+    at->ismount = 0;
+
+    if (at_vnode == cwd_vnode) {
+        // Umounting the cwd
+        cwd_vnode = NULL;
+    }
+    at_vnode->refcount = 0;
+    vnode_free(at_vnode);
+
     return 0;
 }
 

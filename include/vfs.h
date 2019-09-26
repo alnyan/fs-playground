@@ -35,7 +35,7 @@ void vfs_node_free(struct vfs_node *n);
 struct vfs_node *vfs_node_create(const char *name, vnode_t *vn);
 
 int vfs_mount(const char *at, void *blk, const char *fs_name, const char *fs_opt);
-int vfs_umount(vnode_t *at);
+int vfs_umount(const char *target);
 // File ops
 int vfs_statat(vnode_t *at, const char *path, struct stat *st);
 int vfs_stat(const char *path, struct stat *st);
