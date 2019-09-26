@@ -71,6 +71,25 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
     // Assuming the path is normalized
     char path_element[256];
     const char *child_path = vfs_path_element(path_element, path);
+
+    // TODO: this should also be handled by path canonicalizer
+    while (!strcmp(path_element, ".")) {
+        if (!child_path) {
+            // The node we're looking for is this node
+            *res_node = root_node;
+            return 0;
+        }
+        child_path = vfs_path_element(path_element, child_path);
+    }
+    if (!strcmp(path_element, "..")) {
+        if (root_node->parent) {
+            return vfs_find_tree(root_node->parent, child_path, res_node);
+        } else {
+            // TODO: handle root escape
+            abort();
+        }
+    }
+
     vnode_t *root_vnode = root_node->vnode;
     assert(root_vnode);
     int res;

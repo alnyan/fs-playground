@@ -3,6 +3,8 @@
 #include "ext2.h"
 #include "testblk.h"
 
+#include <string.h>
+#include <ctype.h>
 #include <errno.h>
 
 static const char *errno_str(int r) {
@@ -29,7 +31,7 @@ static void dumpstat(char *buf, const struct stat *st) {
         break;
     }
 
-    sprintf(buf, "%c%c%c%c%c%c%c%c%c%c % 5d % 5d %u", t,
+    sprintf(buf, "%c%c%c%c%c%c%c%c%c%c % 5d % 5d %u %u", t,
         (st->st_mode & S_IRUSR) ? 'r' : '-',
         (st->st_mode & S_IWUSR) ? 'w' : '-',
         (st->st_mode & S_IXUSR) ? 'x' : '-',
@@ -41,7 +43,84 @@ static void dumpstat(char *buf, const struct stat *st) {
         (st->st_mode & S_IXOTH) ? 'x' : '-',
         st->st_uid,
         st->st_gid,
-        st->st_size);
+        st->st_size,
+        st->st_ino);
+}
+
+static int shell_stat(const char *path) {
+    struct stat st;
+    int res = vfs_stat(path, &st);
+
+    if (res == 0) {
+        char buf[64];
+        dumpstat(buf, &st);
+        printf("%s\t%s\n", buf, path);
+    }
+
+    return res;
+}
+
+static int shell_tree(const char *arg) {
+    vfs_dump_tree();
+    return 0;
+}
+
+static struct {
+    const char *name;
+    int (*fn) (const char *arg);
+} shell_cmds[] = {
+    { "stat", shell_stat },
+    { "tree", shell_tree },
+};
+
+static void shell(void) {
+    char linebuf[256];
+    char namebuf[64];
+    const char *cmd;
+    const char *arg;
+
+    while (1) {
+        fputs("> ", stdout);
+        if (!fgets(linebuf, sizeof(linebuf), stdin)) {
+            break;
+        }
+
+        size_t i = strlen(linebuf);
+        if (i == 0) {
+            continue;
+        }
+        --i;
+        while (isspace(linebuf[i])) {
+            linebuf[i] = 0;
+            --i;
+        }
+
+        const char *p = strchr(linebuf, ' ');
+        if (p) {
+            strncpy(namebuf, linebuf, p - linebuf);
+            namebuf[p - linebuf] = 0;
+            cmd = namebuf;
+            arg = p + 1;
+        } else {
+            cmd = linebuf;
+            arg = "";
+        }
+
+        for (int i = 0; i < sizeof(shell_cmds) / sizeof(shell_cmds[0]); ++i) {
+            if (!strcmp(shell_cmds[i].name, cmd)) {
+                int res = shell_cmds[i].fn(arg);
+                if (res != 0) {
+                    fprintf(stderr, "%s: %s\n", linebuf, errno_str(res));
+                }
+
+                goto found;
+            }
+        }
+
+        fprintf(stderr, "Command not found: %s\n", cmd);
+found:
+        continue;
+    }
 }
 
 int main() {
@@ -60,38 +139,7 @@ int main() {
         return -1;
     }
 
-    //if ((res = vfs_open(&fd0, "a/b.txt", 0, O_RDONLY)) != 0) {
-    //    fprintf(stderr, "test.txt: %s\n", errno_str(res));
-    //    return -1;
-    //}
-
-    //size_t bread_total = 0;
-    //while ((res = vfs_read(&fd0, buf, sizeof(buf) - 1)) > 0) {
-    //    printf("%d bytes\n", res);
-    //    buf[res] = 0;
-    //    printf("READ DATA\n%s\n", buf);
-    //    bread_total += res;
-    //}
-    //printf("Total: %zu\n", bread_total);
-
-    //vfs_close(&fd0);
-
-    //printf("stat test.txt\n");
-    //if ((res = vfs_stat("test.txt", &st0)) != 0) {
-    //    fprintf(stderr, "stat(test.txt): %s\n", errno_str(res));
-    //    return -1;
-    //}
-    //dumpstat(buf, &st0);
-    //printf("%s\t%s\n", buf, "test.txt");
-    printf("stat a/../a\n");
-    if ((res = vfs_stat("a/../a", &st0)) != 0) {
-        fprintf(stderr, "stat(a): %s\n", errno_str(res));
-        return -1;
-    }
-    dumpstat(buf, &st0);
-    printf("%s\t%s\n", buf, "a");
-
-    vfs_dump_tree();
+    shell();
 
     // Cleanup
     vfs_umount(NULL);
