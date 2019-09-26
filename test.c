@@ -86,12 +86,30 @@ static int shell_ls(const char *arg) {
     return res;
 }
 
+static int shell_cat(const char *arg) {
+    struct ofile fd;
+    int res;
+    char buf[512];
+
+    if ((res = vfs_open(&fd, arg, 0, O_RDONLY)) != 0) {
+        return res;
+    }
+
+    while ((res = vfs_read(&fd, buf, sizeof(buf))) > 0) {
+        fwrite(buf, 1, res, stdout);
+    }
+
+    vfs_close(&fd);
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
 } shell_cmds[] = {
     { "stat", shell_stat },
     { "tree", shell_tree },
+    { "cat", shell_cat },
     { "ls", shell_ls },
 };
 
