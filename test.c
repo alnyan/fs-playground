@@ -135,6 +135,10 @@ static int shell_setcwd(const char *arg) {
     return vfs_setcwd(arg);
 }
 
+static int shell_cd(const char *arg) {
+    return vfs_chdir(arg);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -145,6 +149,7 @@ static struct {
     { "ll", shell_ls_detail },
     { "ls", shell_ls },
     { "setcwd", shell_setcwd },
+    { "cd", shell_cd },
 };
 
 static void shell(void) {
@@ -208,7 +213,14 @@ int main() {
     ext2_class_init();
     testblk_init("ext2.img");
 
-    if ((res = vfs_mount(NULL, &testblk_dev, "ext2", NULL)) != 0) {
+    // Mount ext2 as rootfs
+    if ((res = vfs_mount("/", &testblk_dev, "ext2", NULL)) != 0) {
+        fprintf(stderr, "Failed to mount rootfs\n");
+        return -1;
+    }
+
+    // Guess that should work
+    if ((res = vfs_mount("/a", &testblk_dev, "ext2", NULL)) != 0) {
         fprintf(stderr, "Failed to mount rootfs\n");
         return -1;
     }

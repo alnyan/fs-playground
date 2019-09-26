@@ -15,16 +15,16 @@ static vnode_t *cwd_vnode = NULL;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
 
-int vfs_setcwd(const char *cwd) {
+static int vfs_setcwd_rel(vnode_t *at, const char *path) {
     // cwd is absolute path
     vnode_t *new_cwd;
     int res;
-    if ((res = vfs_find(NULL, cwd, &new_cwd)) != 0) {
+    if ((res = vfs_find(at, path, &new_cwd)) != 0) {
         return res;
     }
 
     vnode_ref(new_cwd);
-    if (new_cwd->type != VN_MNT && new_cwd->type != VN_DIR) {
+    if (new_cwd->type != VN_DIR) {
         vnode_unref(new_cwd);
         return -ENOTDIR;
     }
@@ -37,10 +37,19 @@ int vfs_setcwd(const char *cwd) {
     return 0;
 }
 
+int vfs_setcwd(const char *cwd) {
+    return vfs_setcwd_rel(NULL, cwd);
+}
+
+int vfs_chdir(const char *cwd_rel) {
+    return vfs_setcwd_rel(cwd_vnode, cwd_rel);
+}
+
 void vfs_init(void) {
     // Setup root node
     strcpy(root_node.name, "[root]");
     root_node.vnode = NULL;
+    root_node.real_vnode = NULL;
     root_node.parent = NULL;
     root_node.cdr = NULL;
     root_node.child = NULL;
@@ -77,6 +86,8 @@ struct vfs_node *vfs_node_create(const char *name, vnode_t *vn) {
     vn->tree_node = node;
     node->vnode = vn;
     strcpy(node->name, name);
+    node->ismount = 0;
+    node->real_vnode = NULL;
     node->parent = NULL;
     node->child = NULL;
     node->cdr = NULL;
@@ -120,11 +131,8 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
     assert(root_vnode);
     int res;
 
-    // 1. Make sure we're either looking inside a directory or a mountpoint
-    if (root_vnode->type == VN_MNT) {
-        // 2.1. Get the mount root vnode and do vfs_find on it
-        abort(); // TODO: support nested mounting
-    } else if (root_vnode->type == VN_DIR) {
+    // 1. Make sure we're either looking inside a directory
+    if (root_vnode->type == VN_DIR) {
         // 3.1. It's a directory, try looking up path element inside
         //      the path tree
         for (struct vfs_node *it = root_node->child; it; it = it->cdr) {
@@ -237,7 +245,10 @@ static void vfs_dump_node(struct vfs_node *node, int o) {
         printf("  ");
     }
     printf("% 4d %s", node->vnode->refcount, node->name);
-    if (node->vnode->type == VN_DIR || node->vnode->type == VN_MNT) {
+    if (node->vnode->type == VN_DIR) {
+        if (node->ismount) {
+            printf(" (mount)");
+        }
         printf(":\n");
         for (struct vfs_node *it = node->child; it; it = it->cdr) {
             vfs_dump_node(it, o + 1);
@@ -283,7 +294,7 @@ void vfs_vnode_path(char *path, vnode_t *vn) {
     }
 }
 
-int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
+static int vfs_mount_internal(struct vfs_node *at, void *blkdev, const char *fs_name, const char *opt) {
     struct fs_class *fs_class;
 
     if ((fs_class = fs_class_by_name(fs_name)) == NULL) {
@@ -293,7 +304,7 @@ int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
     // Create a new fs instance/mount
     struct fs *fs;
 
-    if ((fs = fs_create(fs_class, blkdev, at)) == NULL) {
+    if ((fs = fs_create(fs_class, blkdev, NULL)) == NULL) {
         return -EINVAL;
     }
 
@@ -302,18 +313,60 @@ int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
         return -1;
     }
 
-    // If it's a root mount, set root vnode
     if (!at) {
-        root_node.vnode = fs_class->get_root(fs);
-        if (root_node.vnode) {
-            root_node.vnode->tree_node = &root_node;
-        }
-    } else {
-        // Increment refcounter for mountpoint
-        //vnode_ref(at);
+        at = &root_node;
     }
 
+    vnode_t *fs_root;
+    vnode_t *old_vnode = at->vnode;
+
+    if (at->ismount) {
+        // TODO: report error and destroy fs
+        abort();
+    }
+
+    // Try to get root
+    if ((fs_root = fs_class->get_root(fs)) == NULL) {
+        // TODO: report error and destroy fs
+        abort();
+    }
+
+    // If it's a root mount, set root vnode
+    printf("Mounting new fs on %s\n", at->name);
+    at->vnode = fs_root;
+    at->real_vnode = old_vnode;
+    at->ismount = 1;
+    fs_root->tree_node = at;
+
     return 0;
+}
+
+int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char *opt) {
+    struct vfs_node *mount_at;
+    vnode_t *vnode_mount_at;
+    int res;
+
+    if (!root_node.vnode) {
+        // Root does not yet exist, check if we're mounting root:
+        if (!strcmp(target, "/")) {
+            printf("MOUNTING NEW ROOTFS\n");
+            return vfs_mount_internal(NULL, blkdev, fs_name, opt);
+        }
+
+        // Otherwise we cannot perform mounting
+        return -ENOENT;
+    }
+
+    // Lookup the tree node we're mounting at
+    if ((res = vfs_find(cwd_vnode, target, &vnode_mount_at)) != 0) {
+        return res;
+    }
+
+    // Get tree node
+    mount_at = vnode_mount_at->tree_node;
+    assert(mount_at);
+
+    return vfs_mount_internal(mount_at, blkdev, fs_name, opt);
 }
 
 int vfs_umount(vnode_t *at) {
@@ -449,7 +502,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
         assert(!(opt & O_CREAT));
         vnode_ref(vn);
 
-        if (vn->type != VN_DIR && vn->type != VN_MNT) {
+        if (vn->type != VN_DIR) {
             vnode_unref(vn);
             return -ENOTDIR;
         }
@@ -485,7 +538,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     }
 
     // TODO: check permissions here
-    if (vn->type == VN_DIR || vn->type == VN_MNT) {
+    if (vn->type == VN_DIR) {
         return -EISDIR;
     }
 

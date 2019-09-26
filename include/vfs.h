@@ -7,7 +7,12 @@
 // Internal VFS tree node
 struct vfs_node {
     char name[256];
+    // Current vnode unless mnt, otherwise the root node of
+    // the mounted filesystem
     vnode_t *vnode;
+    // Real vnode if mountpoint
+    vnode_t *real_vnode;
+    int ismount;
     // Parent ref
     struct vfs_node *parent;
     // Linked list of children
@@ -18,8 +23,8 @@ struct vfs_node {
 // TODO: in real use case this will be extracted from
 //       process data struct
 extern char vfs_cwd[1024];
-
 int vfs_setcwd(const char *cwd);
+int vfs_chdir(const char *cwd_rel);
 
 void vfs_init(void);
 void vfs_dump_tree(void);
@@ -29,7 +34,7 @@ void vfs_vnode_path(char *path, vnode_t *vn);
 void vfs_node_free(struct vfs_node *n);
 struct vfs_node *vfs_node_create(const char *name, vnode_t *vn);
 
-int vfs_mount(vnode_t *at, void *blk, const char *fs_name, const char *fs_opt);
+int vfs_mount(const char *at, void *blk, const char *fs_name, const char *fs_opt);
 int vfs_umount(vnode_t *at);
 // File ops
 int vfs_statat(vnode_t *at, const char *path, struct stat *st);

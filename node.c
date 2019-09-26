@@ -42,6 +42,10 @@ void vnode_free(vnode_t *vn) {
     assert(!vn->refcount);
     struct vfs_node *node = vn->tree_node;
 
+    if (node->ismount) {
+        return;
+    }
+
     if (vn->op->destroy) {
         // This will free/release underlying fs_data
         vn->op->destroy(vn);

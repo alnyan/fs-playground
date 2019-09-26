@@ -22,7 +22,6 @@ typedef struct fs fs_t;
 enum vnode_type {
     VN_REG,
     VN_DIR,
-    VN_MNT,
     VN_BLK,
     VN_CHR
 };
@@ -62,7 +61,6 @@ struct vnode {
     uint32_t fs_number;
 
     void *tree_node;
-    struct vnode *mnt;
 
     struct vnode_operations *op;
 };
