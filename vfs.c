@@ -165,13 +165,10 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
     }
 }
 
-int vfs_find(vnode_t *root_vnode, const char *path, vnode_t **res_vnode) {
+static int vfs_find_at(vnode_t *root_vnode, const char *path, vnode_t **res_vnode) {
+    // The input path should be without leading slash and relative to root_vnode
     struct vfs_node *res_node = NULL;
     int res;
-
-    while (*path == '/') {
-        ++path;
-    }
 
     if (!root_vnode) {
         // Root node contains no vnode - which means there's no root
@@ -194,6 +191,19 @@ int vfs_find(vnode_t *root_vnode, const char *path, vnode_t **res_vnode) {
     assert(res_node);
     *res_vnode = res_node->vnode;
     return 0;
+}
+
+static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode) {
+    if (*path != '/') {
+        return vfs_find_at(cwd_vnode, path, res_vnode);
+    } else {
+        // Use root as search base
+        while (*path == '/') {
+            ++path;
+        }
+
+        return vfs_find_at(NULL, path, res_vnode);
+    }
 }
 
 static void vfs_dump_node(struct vfs_node *node, int o) {
@@ -477,6 +487,27 @@ void vfs_close(struct ofile *of) {
     }
 
     vnode_unref(of->vnode);
+}
+
+int vfs_statat(vnode_t *at, const char *path, struct stat *st) {
+    assert(at && path && st);
+    int res;
+    vnode_t *vnode;
+
+    if ((res = vfs_find(at, path, &vnode)) != 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+
+    if (!vnode->op || !vnode->op->stat) {
+        res = -EINVAL;
+    } else {
+        res = vnode->op->stat(vnode, st);
+    }
+
+    vnode_unref(vnode);
+    return res;
 }
 
 int vfs_stat(const char *path, struct stat *st) {

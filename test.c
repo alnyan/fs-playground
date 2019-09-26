@@ -102,9 +102,7 @@ static int shell_ls_detail(const char *arg) {
             continue;
         }
 
-        snprintf(fullp, sizeof(fullp), "%s/%s", arg, ent->d_name);
-
-        if ((res = vfs_stat(fullp, &st)) < 0) {
+        if ((res = vfs_statat(fd.vnode, ent->d_name, &st)) < 0) {
             return res;
         }
 
