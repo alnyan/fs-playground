@@ -468,22 +468,36 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
 }
 
 int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
-    // Get parent vnode
-    char parent_path[1024];
-    vfs_path_parent(parent_path, path);
     vnode_t *parent_vnode = NULL;
     vnode_t *vnode = NULL;
     int res;
 
-    if ((res = vfs_find(cwd_vnode, parent_path, &parent_vnode)) != 0) {
-        printf("Parent does not exist: %s\n", parent_path);
-        // Parent doesn't exist, too - error
-        return res;
+    if ((res = vfs_find(cwd_vnode, path, &vnode)) == 0) {
+        // Node already exists with such name:
+        // Needed when find returns node with refcount of zero
+        vnode_ref(vnode);
+        vnode_unref(vnode);
+        return -EEXIST;
+    }
+
+    if (*path == '/') {
+        // Get parent vnode
+        char parent_path[1024];
+        vfs_path_parent(parent_path, path);
+
+        if ((res = vfs_find(cwd_vnode, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            // Parent doesn't exist, too - error
+            return res;
+        }
+    } else {
+        printf("Relative creat nimpl\n");
+        return -EINVAL;
     }
 
     if (parent_vnode->type != VN_DIR) {
         // Parent is not a directory
-        return -ENOENT;
+        return -ENOTDIR;
     }
 
     path = vfs_path_basename(path);
@@ -495,6 +509,17 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
     if ((res = vfs_creat_internal(parent_vnode, path, mode, opt & ~O_CREAT, &vnode)) != 0) {
         // Could not create entry
         return res;
+    }
+
+    if (!of) {
+        vnode_ref(vnode);
+        vnode_unref(vnode);
+        if (opt & O_RDWR) {
+            // Need opening the file, but no descriptor provided
+            return -EINVAL;
+        }
+
+        return 0;
     }
 
     return vfs_open_node(of, vnode, opt & ~O_CREAT);

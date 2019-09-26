@@ -13,6 +13,7 @@
 
 // Forward declaration of ext2 vnode functions
 static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **resvn);
+static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt, vnode_t **resvn);
 static int ext2_vnode_open(vnode_t *vn, int opt);
 static int ext2_vnode_opendir(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
@@ -22,6 +23,7 @@ static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
 
 static struct vnode_operations ext2_vnode_ops = {
     .find = ext2_vnode_find,
+    .creat = ext2_vnode_creat,
     .destroy = ext2_vnode_destroy,
 
     .stat = ext2_vnode_stat,
@@ -41,6 +43,7 @@ static enum vnode_type ext2_inode_type(struct ext2_inode *i) {
     case EXT2_TYPE_REG:
         return VN_REG;
     default:
+        fprintf(stderr, "Unknown file type: %x\n", v);
         abort();
     }
 }
@@ -57,6 +60,30 @@ static int ext2_read_block(fs_t *ext2, uint32_t block_no, void *buf) {
     }
 
     return res;
+}
+
+static int ext2_write_block(fs_t *ext2, uint32_t block_no, const void *buf) {
+    if (!block_no) {
+        return -1;
+    }
+
+    int res = blk_write(ext2->blk, buf, block_no * ext2_super(ext2)->block_size, ext2_super(ext2)->block_size);
+
+    if (res < 0) {
+        fprintf(stderr, "ext2: Failed to write %uth block\n", block_no);
+    }
+
+    return res;
+}
+
+static int ext2_write_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t index, const void *buf) {
+    if (index < 12) {
+        uint32_t block_number = inode->direct_blocks[index];
+        return ext2_write_block(ext2, block_number, buf);
+    } else {
+        // TODO
+        abort();
+    }
 }
 
 static int ext2_read_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t index, void *buf) {
@@ -111,6 +138,205 @@ static int ext2_read_inode(fs_t *ext2, struct ext2_inode *inode, uint32_t ino) {
     return 0;
 }
 
+static int ext2_write_inode(fs_t *ext2, const struct ext2_inode *inode, uint32_t ino) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    //printf("ext2_read_inode %d\n", ino);
+    char inode_block_buffer[sb->block_size];
+    int res;
+
+    uint32_t ino_block_group_number = (ino - 1) / sb->sb.block_group_size_inodes;
+    //printf("inode block group number = %d\n", ino_block_group_number);
+    uint32_t ino_inode_table_block = sb->block_group_descriptor_table[ino_block_group_number].inode_table_block;
+    //printf("inode table is at block %d\n", ino_inode_table_block);
+    uint32_t ino_inode_index_in_group = (ino - 1) % sb->sb.block_group_size_inodes;
+    //printf("inode entry index in the group = %d\n", ino_inode_index_in_group);
+    uint32_t ino_inode_block_in_group = (ino_inode_index_in_group * sb->inode_struct_size) / sb->block_size;
+    //printf("inode entry offset is %d blocks\n", ino_inode_block_in_group);
+    uint32_t ino_inode_block_number = ino_inode_block_in_group + ino_inode_table_block;
+    //printf("inode block number is %uth block\n", ino_inode_block_number);
+
+    // Need to read the block to modify it
+    if ((res = ext2_read_block(ext2, ino_inode_block_number, inode_block_buffer)) < 0) {
+        return res;
+    }
+
+    uint32_t ino_entry_in_block = (ino_inode_index_in_group * sb->inode_struct_size) % sb->block_size;
+    memcpy(&inode_block_buffer[ino_entry_in_block], inode, sb->inode_struct_size);
+
+    // Write the block back
+    if ((res = ext2_write_block(ext2, ino_inode_block_number, inode_block_buffer)) < 0) {
+        return res;
+    }
+
+    return 0;
+}
+
+static int ext2_write_superblock(fs_t *ext2) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    return blk_write(ext2->blk, sb, EXT2_SBOFF, EXT2_SBSIZ);
+}
+
+static int ext2_alloc_inode(fs_t *ext2, uint32_t *ino) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    char block_buffer[sb->block_size];
+    uint32_t res_ino = 0;
+    uint32_t res_group_no = 0;
+    uint32_t res_ino_number_in_group = 0;
+    int res;
+
+    // Look through BGDT to find any block groups with free inodes
+    for (size_t i = 0; i < sb->block_group_count; ++i) {
+        if (sb->block_group_descriptor_table[i].free_inodes > 0) {
+            // Found a block group with free inodes
+            printf("Allocating an inode inside block group #%zu\n", i);
+
+            // Read inode usage bitmap
+            if ((res = ext2_read_block(ext2,
+                                       sb->block_group_descriptor_table[i].inode_usage_bitmap_block,
+                                       block_buffer)) < 0) {
+                return res;
+            }
+
+            // Find a free bit
+            // Think this should be fine on amd64
+            for (size_t j = 0; j < sb->block_size / sizeof(uint64_t); ++j) {
+                // Get bitmap qword
+                uint64_t qw = ((uint64_t *) block_buffer)[j];
+                // If not all bits are set in this qword, find exactly which one
+                if (qw != ((uint64_t) -1)) {
+                    for (size_t k = 0; k < 64; ++k) {
+                        if (!(qw & (1 << k))) {
+                            res_ino_number_in_group = k + j * 64;
+                            res_group_no = i;
+                            res_ino = res_ino_number_in_group + i * sb->sb.block_group_size_inodes + 1;
+                            break;
+                        }
+                    }
+
+                    if (res_ino) {
+                        break;
+                    }
+                }
+
+                if (res_ino) {
+                    break;
+                }
+            }
+        }
+
+        if (res_ino) {
+            break;
+        }
+    }
+    if (res_ino == 0) {
+        return -ENOSPC;
+    }
+
+    // Write updated bitmap
+    ((uint64_t *) block_buffer)[res_ino_number_in_group / 64] |= (1 << (res_ino_number_in_group % 64));
+    if ((res = ext2_write_block(ext2,
+                                sb->block_group_descriptor_table[res_group_no].inode_usage_bitmap_block,
+                                block_buffer)) < 0) {
+        return res;
+    }
+
+    // Write updated BGDT
+    --sb->block_group_descriptor_table[res_group_no].free_inodes;
+    for (size_t i = 0; i < sb->block_group_descriptor_table_size_blocks; ++i) {
+        void *blk_ptr = (void *) (((uintptr_t) sb->block_group_descriptor_table) + i * sb->block_size);
+
+        if ((res = ext2_write_block(ext2, sb->block_group_descriptor_table_block + i, blk_ptr)) < 0) {
+            return res;
+        }
+    }
+
+    // Update global inode count and flush superblock
+    --sb->sb.free_inode_count;
+    if ((res = ext2_write_superblock(ext2)) < 0) {
+        return res;
+    }
+
+    *ino = res_ino;
+
+    return 0;
+}
+
+// Append an inode to directory
+static int ext2_dir_add_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    char block_buffer[sb->block_size];
+    struct ext2_inode *dir_inode = dir->fs_data;
+    struct ext2_dirent *entptr, *resent;
+    int res;
+    int found = 0;
+    int32_t write_block_index = -1;
+    size_t resent_len = 0;
+
+    size_t req_free = strlen(name) + sizeof(struct ext2_dirent);
+    // Align up 4 bytes
+    req_free = (req_free + 3) & ~3;
+
+    // Try reading parent dirent blocks to see if any has
+    // some space to fit our file
+    size_t dir_size_blocks = (dir_inode->size_lower + sb->block_size - 1) / sb->block_size;
+    for (size_t i = 0; i < dir_size_blocks; ++i) {
+        if ((res = ext2_read_inode_block(ext2, dir_inode, i, block_buffer)) < 0) {
+            return res;
+        }
+
+        size_t off = 0;
+        while (off < sb->block_size) {
+            entptr = (struct ext2_dirent *) &block_buffer[off];
+            if (entptr->len == 0) {
+                break;
+            }
+            if (!entptr->ino) {
+                // Possibly free space
+                break;
+            }
+
+            ssize_t extra = entptr->len - sizeof(struct ext2_dirent) - entptr->name_len;
+            // Align up 4 bytes
+            extra = (extra + 3) & ~3;
+
+            if (extra > req_free) {
+                // Resize previous entry
+                entptr->len = (entptr->name_len + sizeof(struct ext2_dirent) + 3) & ~3;
+                off += entptr->len;
+                resent = (struct ext2_dirent *) &block_buffer[off];
+                resent_len = sb->block_size - off;
+                write_block_index = i;
+                found = 1;
+                break;
+            }
+
+            off += entptr->len;
+        }
+
+        if (found) {
+            break;
+        }
+
+        // TODO: ???
+        abort();
+    }
+
+
+    // Place new entry
+    resent->len = resent_len;
+    resent->ino = ino;
+    resent->type_ind = 0;
+    resent->name_len = strlen(name);
+    strncpy(resent->name, name, resent->name_len);
+
+    assert(write_block_index != -1);
+    if ((res = ext2_write_inode_block(ext2, dir_inode, write_block_index, block_buffer)) < 0) {
+        return res;
+    }
+
+    return 0;
+}
+
 static int ext2_fs_mount(fs_t *fs, const char *opt) {
     int res;
     printf("ext2_fs_mount()\n");
@@ -150,6 +376,8 @@ static int ext2_fs_mount(fs_t *fs, const char *opt) {
     if (block_group_descriptor_table_length * sb->sb.block_group_size_blocks < sb->sb.block_count) {
         ++block_group_descriptor_table_length;
     }
+    sb->block_group_count = block_group_descriptor_table_length;
+
     uint32_t block_group_descriptor_table_size_blocks = 32 * block_group_descriptor_table_length /
                                                         sb->block_size + 1;
 
@@ -157,13 +385,15 @@ static int ext2_fs_mount(fs_t *fs, const char *opt) {
     if (sb->block_size > 1024) {
         block_group_descriptor_table_block = 1;
     }
+    sb->block_group_descriptor_table_block = block_group_descriptor_table_block;
+    sb->block_group_descriptor_table_size_blocks = block_group_descriptor_table_size_blocks;
 
     // Load all block group descriptors into memory
-    printf("Allocating %u bytes for BGDT\n", block_group_descriptor_table_size_blocks * sb->block_size);
-    sb->block_group_descriptor_table = (struct ext2_grp_desc *) malloc(block_group_descriptor_table_size_blocks * sb->block_size);
+    printf("Allocating %u bytes for BGDT\n", sb->block_group_descriptor_table_size_blocks * sb->block_size);
+    sb->block_group_descriptor_table = (struct ext2_grp_desc *) malloc(sb->block_group_descriptor_table_size_blocks * sb->block_size);
 
-    for (size_t i = 0; i < block_group_descriptor_table_size_blocks; ++i) {
-        ext2_read_block(fs, i + block_group_descriptor_table_block,
+    for (size_t i = 0; i < sb->block_group_descriptor_table_size_blocks; ++i) {
+        ext2_read_block(fs, i + sb->block_group_descriptor_table_block,
                         (void *) (((uintptr_t) sb->block_group_descriptor_table) + i * sb->block_size));
     }
 
@@ -284,6 +514,78 @@ static int ext2_vnode_open(vnode_t *vn, int opt) {
     }
 
     assert(vn->type == VN_REG);
+    return 0;
+}
+
+static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt, vnode_t **resvn) {
+    fs_t *ext2 = at->fs;
+    assert(at->type == VN_DIR);
+    assert(/* Don't support making directories like this */ !(mode & O_DIRECTORY));
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+
+    uint32_t new_ino;
+    int res;
+
+    // Allocate new inode number
+    if ((res = ext2_alloc_inode(ext2, &new_ino)) != 0) {
+        printf("Failed to allocate inode\n");
+        return res;
+    }
+
+    printf("Allocated inode %d\n", new_ino);
+
+    // Create an inode struct in memory
+    struct ext2_inode *ent_inode = (struct ext2_inode *) malloc(sb->inode_struct_size);
+
+    // Now create an entry in parents dirent list
+    if ((res = ext2_dir_add_inode(ext2, at, name, new_ino)) < 0) {
+        return res;
+    }
+
+    // Fill the inode
+    ent_inode->flags = 0;
+    ent_inode->dir_acl = 0;
+    ent_inode->frag_block_addr = 0;
+    ent_inode->gen_number = 0;
+    ent_inode->hard_link_count = 0;
+    ent_inode->acl = 0;
+    ent_inode->os_value_1 = 0;
+    memset(ent_inode->os_value_2, 0, sizeof(ent_inode->os_value_2));
+    // TODO: time support in kernel
+    ent_inode->atime = 0;
+    ent_inode->mtime = 0;
+    ent_inode->ctime = 0;
+    ent_inode->dtime = 0;
+
+    memset(ent_inode->direct_blocks, 0, sizeof(ent_inode->direct_blocks));
+    ent_inode->l1_indirect_block = 0;
+    ent_inode->l2_indirect_block = 0;
+    ent_inode->l3_indirect_block = 0;
+
+    // TODO: only regular files can be created this way now
+    ent_inode->type_perm = (mode & 0x1FF) | (EXT2_TYPE_REG);
+    // TODO: obtain these from process context in kernel
+    ent_inode->uid = 0;
+    ent_inode->gid = 0;
+    ent_inode->disk_sector_count = 0;
+    ent_inode->size_upper = 0;
+    ent_inode->size_lower = 0;
+
+    // Write the inode
+    if ((res = ext2_write_inode(ext2, ent_inode, new_ino)) < 0) {
+        return res;
+    }
+
+    // Create the resulting vnode
+    vnode_t *vn = (vnode_t *) malloc(sizeof(vnode_t));
+    vn->fs = ext2;
+    vn->fs_data = ent_inode;
+    vn->fs_number = new_ino;
+    vn->op = &ext2_vnode_ops;
+    vn->type = VN_REG;
+
+    *resvn = vn;
+
     return 0;
 }
 

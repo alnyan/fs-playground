@@ -67,6 +67,9 @@ struct ext2_extsb {
 
     // driver-specific info
     uint32_t block_size;
+    uint32_t block_group_count;
+    uint32_t block_group_descriptor_table_block;
+    uint32_t block_group_descriptor_table_size_blocks;
     struct ext2_grp_desc *block_group_descriptor_table;
 } __attribute__((packed));
 
@@ -113,6 +116,6 @@ struct ext2_dirent {
     uint8_t name_len;
     uint8_t type_ind;
     char name[];
-};
+} __attribute__((packed));
 
 void ext2_class_init(void);

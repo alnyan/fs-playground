@@ -21,6 +21,10 @@ static const char *errno_str(int r) {
             return "Not a directory";
         case -EISDIR:
             return "Is a directory";
+        case -EEXIST:
+            return "File exists";
+        case -ENOSPC:
+            return "No space left on device";
         default:
             return "Unknown error";
     }
@@ -139,6 +143,16 @@ static int shell_cd(const char *arg) {
     return vfs_chdir(arg);
 }
 
+static int shell_touch(const char *arg) {
+    int res;
+
+    if ((res = vfs_creat(NULL, arg, 0644, 0)) != 0) {
+        return res;
+    }
+
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -149,6 +163,7 @@ static struct {
     { "ll", shell_ls_detail },
     { "ls", shell_ls },
     { "setcwd", shell_setcwd },
+    { "touch", shell_touch },
     { "cd", shell_cd },
 };
 
@@ -219,19 +234,9 @@ int main() {
         return -1;
     }
 
-    // Guess that should work
-    if ((res = vfs_mount("/a", &testblk_dev, "ext2", NULL)) != 0) {
-        fprintf(stderr, "Failed to mount rootfs\n");
-        return -1;
-    }
-
     shell();
 
     // Cleanup
-    if ((res = vfs_umount("/a")) != 0) {
-        fprintf(stderr, "Failed to umount /a\n");
-        return -1;
-    }
     if ((res = vfs_umount("/")) != 0) {
         fprintf(stderr, "Failed to umount /\n");
         return -1;
