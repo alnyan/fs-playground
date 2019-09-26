@@ -17,6 +17,7 @@ static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt,
 static int ext2_vnode_open(vnode_t *vn, int opt);
 static int ext2_vnode_opendir(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
+static ssize_t ext2_vnode_write(struct ofile *fd, const void *buf, size_t count);
 static int ext2_vnode_readdir(struct ofile *fd);
 static void ext2_vnode_destroy(vnode_t *vn);
 static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
@@ -32,7 +33,8 @@ static struct vnode_operations ext2_vnode_ops = {
     .readdir = ext2_vnode_readdir,
 
     .open = ext2_vnode_open,
-    .read = ext2_vnode_read
+    .read = ext2_vnode_read,
+    .write = ext2_vnode_write,
 };
 
 static enum vnode_type ext2_inode_type(struct ext2_inode *i) {
@@ -174,6 +176,103 @@ static int ext2_write_inode(fs_t *ext2, const struct ext2_inode *inode, uint32_t
 static int ext2_write_superblock(fs_t *ext2) {
     struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
     return blk_write(ext2->blk, sb, EXT2_SBOFF, EXT2_SBSIZ);
+}
+
+static int ext2_alloc_block(fs_t *ext2, uint32_t *block_no) {
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    char block_buffer[sb->block_size];
+    uint32_t res_block_no = 0;
+    uint32_t res_group_no = 0;
+    uint32_t res_block_no_in_group = 0;
+    int found = 0;
+    int res;
+
+    for (size_t i = 0; i < sb->block_group_count; ++i) {
+        if (sb->block_group_descriptor_table[i].free_blocks > 0) {
+            // Found a free block here
+            printf("Allocating a block in group #%zu\n", i);
+
+            if ((res = ext2_read_block(ext2,
+                                       sb->block_group_descriptor_table[i].block_usage_bitmap_block,
+                                       block_buffer)) < 0) {
+                return res;
+            }
+
+            for (size_t j = 0; j < sb->block_size / sizeof(uint64_t); ++j) {
+                uint64_t qw = ((uint64_t *) block_buffer)[j];
+                if (qw != (uint64_t) -1) {
+                    for (size_t k = 0; k < 64; ++k) {
+                        if (!(qw & (1 << k))) {
+                            res_block_no_in_group = k + j * 64;
+                            res_group_no = i;
+                            res_block_no = res_block_no_in_group + i * sb->sb.block_group_size_blocks;
+                            found = 1;
+                            break;
+                        }
+                    }
+
+                    if (found) {
+                        break;
+                    }
+                }
+            }
+            if (found) {
+                break;
+            }
+        }
+    }
+
+    if (!found) {
+        return -ENOSPC;
+    }
+
+    // Write block usage bitmap
+    ((uint64_t *) block_buffer)[res_block_no_in_group / 64] |= (1 << (res_block_no_in_group % 64));
+    if ((res = ext2_write_block(ext2,
+                                sb->block_group_descriptor_table[res_group_no].block_usage_bitmap_block,
+                                block_buffer)) < 0) {
+        return res;
+    }
+
+    // Update BGDT
+    --sb->block_group_descriptor_table[res_group_no].free_blocks;
+    for (size_t i = 0; i < sb->block_group_descriptor_table_size_blocks; ++i) {
+        void *blk_ptr = (void *) (((uintptr_t) sb->block_group_descriptor_table) + i * sb->block_size);
+
+        if ((res = ext2_write_block(ext2, sb->block_group_descriptor_table_block + i, blk_ptr)) < 0) {
+            return res;
+        }
+    }
+
+    // Update global block count and flush superblock
+    --sb->sb.free_block_count;
+    if ((res = ext2_write_superblock(ext2)) < 0) {
+        return res;
+    }
+
+    *block_no = res_block_no;
+    return 0;
+}
+
+static int ext2_inode_alloc_block(fs_t *ext2, struct ext2_inode *inode, uint32_t ino, uint32_t index) {
+    if (index >= 12) {
+        fprintf(stderr, "Not implemented\n");
+        abort();
+    }
+
+    int res;
+    uint32_t block_no;
+
+    // Allocate the block itself
+    if ((res = ext2_alloc_block(ext2, &block_no)) < 0) {
+        return res;
+    }
+
+    // Write direct block list entry
+    inode->direct_blocks[index] = block_no;
+
+    // Flush changes to the device
+    return ext2_write_inode(ext2, inode, ino);
 }
 
 static int ext2_alloc_inode(fs_t *ext2, uint32_t *ino) {
@@ -476,7 +575,7 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
                     out->op = &ext2_vnode_ops;
                     out->fs = ext2;
 
-                    struct ext2_inode *result_inode = (struct ext2_inode *) malloc(sizeof(struct ext2_inode));
+                    struct ext2_inode *result_inode = (struct ext2_inode *) malloc(sb->inode_struct_size);
                     if (ext2_read_inode(ext2, result_inode, dirent->ino) != 0) {
                         return -EIO;
                     }
@@ -508,10 +607,11 @@ static int ext2_vnode_opendir(vnode_t *vn, int opt) {
 }
 
 static int ext2_vnode_open(vnode_t *vn, int opt) {
-    // Writing is not yet implemented
-    if (opt & O_WRONLY) {
-        return -EROFS;
-    }
+    // XXX:
+    //  When opening a file for reading,
+    //  we still don't truncate, move fd->pos
+    //  to the end of the file, so the blocks
+    //  don't get used
 
     assert(vn->type == VN_REG);
     return 0;
@@ -619,6 +719,107 @@ static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
     }
 
     return nread;
+}
+
+static ssize_t ext2_vnode_write(struct ofile *fd, const void *buf, size_t count) {
+    vnode_t *vn = fd->vnode;
+    assert(vn);
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+    fs_t *ext2 = vn->fs;
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    char block_buffer[sb->block_size];
+    int res;
+
+    if (fd->pos > inode->size_lower) {
+        // This shouldn't be possible, yeah?
+        return -ESPIPE;
+    }
+
+    // How many bytes can we write into the blocks already allocated
+    size_t size_blocks = (inode->size_lower + sb->block_size - 1) / sb->block_size;
+    size_t can_write = size_blocks * sb->block_size - inode->size_lower;
+    size_t current_block = fd->pos / sb->block_size;
+    size_t written = 0;
+    size_t remaining = count;
+
+    if (can_write) {
+        size_t can_write_blocks = (can_write + sb->block_size - 1) / sb->block_size;
+
+        for (size_t i = 0; i < can_write_blocks; ++i) {
+            size_t block_index = current_block + i;
+            size_t pos_in_block = fd->pos % sb->block_size;
+            size_t need_write = MIN(remaining, sb->block_size - pos_in_block);
+
+            printf("Write %dB to block %d offset %d\n", need_write, block_index, pos_in_block);
+            if (need_write == sb->block_size) {
+                // Can write block without reading it
+                // TODO: implement this
+                abort();
+            } else {
+                // Read the block to change its contents
+                // and write it back again
+                if ((res = ext2_read_inode_block(ext2, inode, block_index, block_buffer)) < 0) {
+                    break;
+                }
+
+                memcpy(block_buffer + pos_in_block, buf + written, need_write);
+
+                if ((res = ext2_write_inode_block(ext2, inode, block_index, block_buffer)) < 0) {
+                    break;
+                }
+            }
+
+            written += need_write;
+            fd->pos += need_write;
+            remaining -= need_write;
+        }
+
+        inode->size_lower = fd->pos;
+        current_block += can_write_blocks;
+    }
+
+    if (remaining) {
+        // Need to allocate additional blocks
+        size_t need_blocks = (remaining + sb->block_size - 1) / sb->block_size;
+
+        for (size_t i = 0; i < need_blocks; ++i) {
+            size_t block_index = current_block + i;
+            size_t need_write = MIN(remaining, sb->block_size);
+
+            // Update the size here so it gets written when the block is allocated
+            // and inode struct is flushed
+            inode->size_lower += need_write;
+            // Allocate a block for the index
+            if ((res = ext2_inode_alloc_block(ext2, inode, vn->fs_number, block_index)) < 0) {
+                printf("Could not allocate a block for writing\n");
+                break;
+            }
+
+
+            if (need_write == sb->block_size) {
+                // TODO: implement this
+                abort();
+            } else {
+                // Writing the last block
+                memcpy(block_buffer, buf + written, need_write);
+
+                if ((res = ext2_write_inode_block(ext2, inode, block_index, block_buffer)) < 0) {
+                    break;
+                }
+            }
+
+            written += need_write;
+            fd->pos += need_write;
+            remaining -= need_write;
+        }
+    } else {
+        if (written) {
+            // Flush inode struct to disk - size has changed
+            ext2_write_inode(ext2, inode, vn->fs_number);
+        }
+    }
+
+    return written;
 }
 
 // TODO: replace this with getdents

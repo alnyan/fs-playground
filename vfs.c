@@ -700,13 +700,7 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
         return -EINVAL;
     }
 
-    ssize_t nr = vn->op->write(fd, buf, count);
-
-    if (nr > 0) {
-        fd->pos += nr;
-    }
-
-    return nr;
+    return vn->op->write(fd, buf, count);
 }
 
 struct dirent *vfs_readdir(struct ofile *fd) {

@@ -153,6 +153,29 @@ static int shell_touch(const char *arg) {
     return 0;
 }
 
+static int shell_hello(const char *arg) {
+    struct ofile fd;
+    int res;
+    char linebuf[512];
+
+    printf("= ");
+    if (!fgets(linebuf, sizeof(linebuf), stdin)) {
+        return -1;
+    }
+
+    if ((res = vfs_open(&fd, arg, 0644, O_CREAT | O_WRONLY)) < 0) {
+        return res;
+    }
+
+    if ((res = vfs_write(&fd, linebuf, strlen(linebuf))) < 0) {
+        return res;
+    }
+
+    vfs_close(&fd);
+
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -164,6 +187,7 @@ static struct {
     { "ls", shell_ls },
     { "setcwd", shell_setcwd },
     { "touch", shell_touch },
+    { "hello", shell_hello },
     { "cd", shell_cd },
 };
 
