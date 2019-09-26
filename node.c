@@ -68,6 +68,10 @@ void vnode_unref(vnode_t *vn) {
     // TODO: don't free root nodes
     char buf[1024];
     vfs_vnode_path(buf, vn);
+    if (vn->refcount == 0 && ((struct vfs_node *) vn->tree_node)->child == NULL) {
+        vnode_free(vn);
+        return;
+    }
     printf("--refcount for %s\n", buf);
     assert(vn->refcount > 0);
     --vn->refcount;

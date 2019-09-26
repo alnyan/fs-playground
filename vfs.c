@@ -88,10 +88,11 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
                 if (!child_path) {
                     // We're at terminal path element - which means we've
                     // found what we're looking for
-                    vnode_ref(root_vnode);
+                    //vnode_ref(root_vnode);
                     *res_node = it;
                     return 0;
                 } else {
+                    printf("Entering vfs_node %s\n", it->name);
                     // Continue searching deeper
                     if ((res = vfs_find_tree(it, child_path, res_node)) != 0) {
                         // Nothing found
@@ -99,7 +100,6 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
                     }
 
                     // Found something
-                    vnode_ref(root_vnode);
                     return 0;
                 }
             }
@@ -110,6 +110,7 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
         vnode_t *child_vnode = NULL;
         struct vfs_node *child_node = NULL;
 
+        printf("Calling op->find on %s\n", root_node->name);
         if ((res = root_vnode->op->find(root_vnode, path_element, &child_vnode)) != 0) {
             // fs didn't find anything - no such file or directory exists
             return res;
@@ -126,23 +127,17 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
         if (!child_path) {
             // We're at terminal path element - return the node
             *res_node = child_node;
-            vnode_ref(root_vnode);
             return 0;
         } else {
+            printf("Entering vfs_node %s\n", child_node->name);
             if ((res = vfs_find_tree(child_node, child_path, res_node)) != 0) {
                 // Nothing found in the child
-                // Additionally, no one uses child now,
-                // deallocate it
-                vnode_unref(child_vnode);
-                // If vnode_unref frees the vnode, it'll also
-                // remove the associated vfs_node from parent's list
                 return res;
             }
 
             // Found what we're looking for
             // Now have not only a child reference, but also someone uses the
             // node down the tree, so increment the refcounter
-            vnode_ref(root_vnode);
             return 0;
         }
     } else {
@@ -186,7 +181,7 @@ static void vfs_dump_node(struct vfs_node *node, int o) {
     for (int i = 0; i < o; ++i) {
         printf("  ");
     }
-    printf("%s", node->name);
+    printf("% 4d %s", node->vnode->refcount, node->name);
     if (node->vnode->type == VN_DIR || node->vnode->type == VN_MNT) {
         printf(":\n");
         for (struct vfs_node *it = node->child; it; it = it->cdr) {
@@ -260,7 +255,7 @@ int vfs_mount(vnode_t *at, void *blkdev, const char *fs_name, const char *opt) {
         }
     } else {
         // Increment refcounter for mountpoint
-        vnode_ref(at);
+        //vnode_ref(at);
     }
 
     return 0;
@@ -334,7 +329,6 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
     child_node->parent = parent_node;
     child_node->cdr = parent_node->child;
     parent_node->child = child_node;
-    vnode_ref(at);
 
     return 0;
 }

@@ -235,7 +235,7 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
                 break;
             }
             if (dirent->ino) {
-                if (!strncmp(dirent->name, name, dirent->name_len)) {
+                if (strlen(name) == dirent->name_len && !strncmp(dirent->name, name, dirent->name_len)) {
                     // Found the entry
                     vnode_t *out = (vnode_t *) malloc(sizeof(vnode_t));
                     out->op = &ext2_vnode_ops;
@@ -251,6 +251,7 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
                     out->type = ext2_inode_type(result_inode);
 
                     *res = out;
+                    printf("Lookup %s in ino %d = %d\n", name, vn->fs_number, out->fs_number);
                     return 0;
                 }
             }
