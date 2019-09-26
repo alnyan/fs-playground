@@ -29,10 +29,8 @@ static void vfs_node_remove(struct vfs_node *node) {
     }
 
     // Decrement refcount for parent, unless it's [root]
-    if (parent->parent) {
-        vnode_t *parent_vn = parent->vnode;
-        assert(parent_vn);
-        vnode_unref(parent_vn);
+    if (parent->parent && !parent->child && !parent->vnode->refcount) {
+        vnode_free(parent->vnode);
     }
 
     // Just a wrapper around free()
@@ -57,9 +55,9 @@ void vnode_free(vnode_t *vn) {
 }
 
 void vnode_ref(vnode_t *vn) {
-    char buf[1024];
-    vfs_vnode_path(buf, vn);
-    printf("++refcount for %s\n", buf);
+//    char buf[1024];
+//    vfs_vnode_path(buf, vn);
+//    printf("++refcount for %s\n", buf);
 
     ++vn->refcount;
 }
@@ -76,7 +74,7 @@ void vnode_unref(vnode_t *vn) {
         vnode_free(vn);
         return;
     }
-    printf("--refcount for %s\n", buf);
+//    printf("--refcount for %s\n", buf);
     assert(vn->refcount > 0);
     --vn->refcount;
 

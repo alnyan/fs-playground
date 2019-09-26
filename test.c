@@ -86,6 +86,36 @@ static int shell_ls(const char *arg) {
     return res;
 }
 
+static int shell_ls_detail(const char *arg) {
+    struct ofile fd;
+    struct dirent *ent;
+    struct stat st;
+    char fullp[512];
+    int res;
+
+    if ((res = vfs_open(&fd, arg, 0, O_DIRECTORY | O_RDONLY)) < 0) {
+        return res;
+    }
+
+    while ((ent = vfs_readdir(&fd))) {
+        if (ent->d_name[0] == '.') {
+            continue;
+        }
+
+        snprintf(fullp, sizeof(fullp), "%s/%s", arg, ent->d_name);
+
+        if ((res = vfs_stat(fullp, &st)) < 0) {
+            return res;
+        }
+
+        dumpstat(fullp, &st);
+        printf("%s\t%s\n", fullp, ent->d_name);
+    }
+
+    vfs_close(&fd);
+    return 0;
+}
+
 static int shell_cat(const char *arg) {
     struct ofile fd;
     int res;
@@ -110,6 +140,7 @@ static struct {
     { "stat", shell_stat },
     { "tree", shell_tree },
     { "cat", shell_cat },
+    { "ll", shell_ls_detail },
     { "ls", shell_ls },
 };
 

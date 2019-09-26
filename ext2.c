@@ -256,7 +256,7 @@ static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **res) {
                     out->type = ext2_inode_type(result_inode);
 
                     *res = out;
-                    printf("Lookup %s in ino %d = %d\n", name, vn->fs_number, out->fs_number);
+                    //printf("Lookup %s in ino %d = %d\n", name, vn->fs_number, out->fs_number);
                     return 0;
                 }
             }

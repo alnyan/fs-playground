@@ -111,7 +111,7 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
                     *res_node = it;
                     return 0;
                 } else {
-                    printf("Entering vfs_node %s\n", it->name);
+                    //printf("Entering vfs_node %s\n", it->name);
                     // Continue searching deeper
                     if ((res = vfs_find_tree(it, child_path, res_node)) != 0) {
                         // Nothing found
@@ -129,7 +129,7 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
         vnode_t *child_vnode = NULL;
         struct vfs_node *child_node = NULL;
 
-        printf("Calling op->find on %s\n", root_node->name);
+        //printf("Calling op->find on %s\n", root_node->name);
         if ((res = root_vnode->op->find(root_vnode, path_element, &child_vnode)) != 0) {
             // fs didn't find anything - no such file or directory exists
             return res;
@@ -148,7 +148,7 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
             *res_node = child_node;
             return 0;
         } else {
-            printf("Entering vfs_node %s\n", child_node->name);
+            //printf("Entering vfs_node %s\n", child_node->name);
             if ((res = vfs_find_tree(child_node, child_path, res_node)) != 0) {
                 // Nothing found in the child
                 return res;
