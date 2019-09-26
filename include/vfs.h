@@ -15,6 +15,12 @@ struct vfs_node {
     struct vfs_node *cdr;
 };
 
+// TODO: in real use case this will be extracted from
+//       process data struct
+extern char vfs_cwd[1024];
+
+int vfs_setcwd(const char *cwd);
+
 void vfs_init(void);
 void vfs_dump_tree(void);
 void vfs_vnode_path(char *path, vnode_t *vn);

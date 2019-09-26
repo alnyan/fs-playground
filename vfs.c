@@ -10,6 +10,32 @@
 #include <stdio.h>
 
 static struct vfs_node root_node;
+char vfs_cwd[1024];
+static vnode_t *cwd_vnode = NULL;
+
+static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
+
+int vfs_setcwd(const char *cwd) {
+    // cwd is absolute path
+    vnode_t *new_cwd;
+    int res;
+    if ((res = vfs_find(NULL, cwd, &new_cwd)) != 0) {
+        return res;
+    }
+
+    vnode_ref(new_cwd);
+    if (new_cwd->type != VN_MNT && new_cwd->type != VN_DIR) {
+        vnode_unref(new_cwd);
+        return -ENOTDIR;
+    }
+
+    if (cwd_vnode) {
+        vnode_unref(cwd_vnode);
+    }
+    cwd_vnode = new_cwd;
+
+    return 0;
+}
 
 void vfs_init(void) {
     // Setup root node
@@ -370,7 +396,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
     vnode_t *vnode = NULL;
     int res;
 
-    if ((res = vfs_find(NULL, parent_path, &parent_vnode)) != 0) {
+    if ((res = vfs_find(cwd_vnode, parent_path, &parent_vnode)) != 0) {
         printf("Parent does not exist: %s\n", parent_path);
         // Parent doesn't exist, too - error
         return res;
@@ -403,7 +429,7 @@ int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
 
     // TODO: normalize path
 
-    if ((res = vfs_find(NULL, path, &vnode)) != 0) {
+    if ((res = vfs_find(cwd_vnode, path, &vnode)) != 0) {
         if (!(opt & O_CREAT)) {
             return -ENOENT;
         }
@@ -515,7 +541,7 @@ int vfs_stat(const char *path, struct stat *st) {
     vnode_t *vnode;
     int res;
 
-    if ((res = vfs_find(NULL, path, &vnode)) != 0) {
+    if ((res = vfs_find(cwd_vnode, path, &vnode)) != 0) {
         return res;
     }
 

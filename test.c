@@ -131,6 +131,10 @@ static int shell_cat(const char *arg) {
     return 0;
 }
 
+static int shell_setcwd(const char *arg) {
+    return vfs_setcwd(arg);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -140,6 +144,7 @@ static struct {
     { "cat", shell_cat },
     { "ll", shell_ls_detail },
     { "ls", shell_ls },
+    { "setcwd", shell_setcwd },
 };
 
 static void shell(void) {
