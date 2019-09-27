@@ -22,7 +22,12 @@ struct vfs_node {
 
 // TODO: in real use case this will be extracted from
 //       process data struct
-extern char vfs_cwd[1024];
+struct vfs_user_context {
+    // Process' current working directory
+    vnode_t *cwd_vnode;
+};
+extern struct vfs_user_context vfs_ctx;
+
 int vfs_setcwd(const char *cwd);
 int vfs_chdir(const char *cwd_rel);
 

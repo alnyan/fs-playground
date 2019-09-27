@@ -10,8 +10,7 @@
 #include <stdio.h>
 
 static struct vfs_node root_node;
-char vfs_cwd[1024];
-static vnode_t *cwd_vnode = NULL;
+struct vfs_user_context vfs_ctx;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
 
@@ -29,10 +28,10 @@ static int vfs_setcwd_rel(vnode_t *at, const char *path) {
         return -ENOTDIR;
     }
 
-    if (cwd_vnode) {
-        vnode_unref(cwd_vnode);
+    if (vfs_ctx.cwd_vnode) {
+        vnode_unref(vfs_ctx.cwd_vnode);
     }
-    cwd_vnode = new_cwd;
+    vfs_ctx.cwd_vnode = new_cwd;
 
     return 0;
 }
@@ -42,10 +41,13 @@ int vfs_setcwd(const char *cwd) {
 }
 
 int vfs_chdir(const char *cwd_rel) {
-    return vfs_setcwd_rel(cwd_vnode, cwd_rel);
+    return vfs_setcwd_rel(vfs_ctx.cwd_vnode, cwd_rel);
 }
 
 void vfs_init(void) {
+    // Setup testing usage context
+    vfs_ctx.cwd_vnode = NULL;
+
     // Setup root node
     strcpy(root_node.name, "[root]");
     root_node.vnode = NULL;
@@ -364,7 +366,7 @@ int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char 
     }
 
     // Lookup the tree node we're mounting at
-    if ((res = vfs_find(cwd_vnode, target, &vnode_mount_at)) != 0) {
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, target, &vnode_mount_at)) != 0) {
         return res;
     }
 
@@ -387,7 +389,7 @@ int vfs_umount(const char *target) {
     struct vfs_node *at;
     int res;
 
-    if ((res = vfs_find(cwd_vnode, target, &at_vnode)) != 0) {
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, target, &at_vnode)) != 0) {
         return res;
     }
 
@@ -407,9 +409,9 @@ int vfs_umount(const char *target) {
     at->vnode = at->real_vnode;
     at->ismount = 0;
 
-    if (at_vnode == cwd_vnode) {
+    if (at_vnode == vfs_ctx.cwd_vnode) {
         // Umounting the cwd
-        cwd_vnode = NULL;
+        vfs_ctx.cwd_vnode = NULL;
     }
     at_vnode->refcount = 0;
     vnode_free(at_vnode);
@@ -425,8 +427,7 @@ static void vfs_path_parent(char *dst, const char *path) {
 
     const char *slash = strrchr(path, '/');
     if (!slash) {
-        dst[0] = '/';
-        dst[1] = 0;
+        dst[0] = 0;
         return;
     }
 
@@ -437,7 +438,7 @@ static void vfs_path_parent(char *dst, const char *path) {
 static const char *vfs_path_basename(const char *path) {
     const char *slash = strrchr(path, '/');
     if (!slash) {
-        return NULL;
+        return path;
     }
 
     return slash + 1;
@@ -473,7 +474,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
     vnode_t *vnode = NULL;
     int res;
 
-    if ((res = vfs_find(cwd_vnode, path, &vnode)) == 0) {
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) == 0) {
         return vfs_open_node(of, vnode, opt & ~O_CREAT);
     }
 
@@ -482,14 +483,25 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         char parent_path[1024];
         vfs_path_parent(parent_path, path);
 
-        if ((res = vfs_find(cwd_vnode, parent_path, &parent_vnode)) != 0) {
+        if ((res = vfs_find(NULL, parent_path, &parent_vnode)) != 0) {
             printf("Parent does not exist: %s\n", parent_path);
             // Parent doesn't exist, too - error
             return res;
         }
     } else {
-        printf("Relative creat nimpl\n");
-        return -EINVAL;
+        char parent_path[1024];
+        vfs_path_parent(parent_path, path);
+
+        if (!*parent_path) {
+            parent_path[0] = '.';
+            parent_path[1] = 0;
+        }
+
+        // Find parent
+        if ((res = vfs_find(vfs_ctx.cwd_vnode, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            return res;
+        }
     }
 
     if (parent_vnode->type != VN_DIR) {
@@ -497,6 +509,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         return -ENOTDIR;
     }
 
+    printf("Path: %s\n", path);
     path = vfs_path_basename(path);
 
     if (!path) {
@@ -526,7 +539,7 @@ int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
 
     // TODO: normalize path
 
-    if ((res = vfs_find(cwd_vnode, path, &vnode)) != 0) {
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
         if (!(opt & O_CREAT)) {
             return -ENOENT;
         }
@@ -638,7 +651,7 @@ int vfs_stat(const char *path, struct stat *st) {
     vnode_t *vnode;
     int res;
 
-    if ((res = vfs_find(cwd_vnode, path, &vnode)) != 0) {
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
         return res;
     }
 
