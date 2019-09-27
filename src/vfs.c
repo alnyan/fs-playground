@@ -13,6 +13,7 @@ static struct vfs_node root_node;
 struct vfs_user_context vfs_ctx;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
+static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid);
 
 static int vfs_setcwd_rel(vnode_t *at, const char *path) {
     // cwd is absolute path
@@ -42,6 +43,70 @@ int vfs_setcwd(const char *cwd) {
 
 int vfs_chdir(const char *cwd_rel) {
     return vfs_setcwd_rel(vfs_ctx.cwd_vnode, cwd_rel);
+}
+
+static int vfs_open_access_mask(int oflags) {
+    if (oflags & O_EXEC) {
+        return X_OK;
+    }
+
+    switch (oflags & O_ACCMODE) {
+    case O_WRONLY:
+        return W_OK;
+    case O_RDONLY:
+        return R_OK;
+    case O_RDWR:
+        return R_OK | W_OK;
+    default:
+        abort();
+    }
+}
+
+static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
+    if (vfs_ctx.uid == 0) {
+        if (desm & X_OK) {
+            // Check if anyone at all can execute this
+            if (!(mode & (S_IXOTH | S_IXGRP | S_IXUSR))) {
+                return -EACCES;
+            }
+        }
+
+        return 0;
+    }
+
+    if (uid == vfs_ctx.uid) {
+        if ((desm & R_OK) && !(mode & S_IRUSR)) {
+            return -EACCES;
+        }
+        if ((desm & W_OK) && !(mode & S_IWUSR)) {
+            return -EACCES;
+        }
+        if ((desm & X_OK) && !(mode & S_IXUSR)) {
+            return -EACCES;
+        }
+    } else if (gid == vfs_ctx.gid) {
+        if ((desm & R_OK) && !(mode & S_IRGRP)) {
+            return -EACCES;
+        }
+        if ((desm & W_OK) && !(mode & S_IWGRP)) {
+            return -EACCES;
+        }
+        if ((desm & X_OK) && !(mode & S_IXGRP)) {
+            return -EACCES;
+        }
+    } else {
+        if ((desm & R_OK) && !(mode & S_IROTH)) {
+            return -EACCES;
+        }
+        if ((desm & W_OK) && !(mode & S_IWOTH)) {
+            return -EACCES;
+        }
+        if ((desm & X_OK) && !(mode & S_IXOTH)) {
+            return -EACCES;
+        }
+    }
+
+    return 0;
 }
 
 void vfs_init(void) {
@@ -939,4 +1004,41 @@ int vfs_mkdir(const char *path, mode_t mode) {
     res = parent_vnode->op->mkdir(parent_vnode, path, mode);
     vnode_unref(parent_vnode);
     return res;
+}
+
+int vfs_access(const char *path, int mode) {
+    assert(path);
+    vnode_t *vnode;
+    int res;
+
+    mode_t vn_mode;
+    uid_t vn_uid;
+    gid_t vn_gid;
+
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+    if (mode == F_OK) {
+        vnode_unref(vnode);
+        return 0;
+    }
+
+    assert(vnode->op);
+
+    if (!vnode->op->access) {
+        vnode_unref(vnode);
+        // Filesystem has no permissions?
+        return -EINVAL;
+    }
+
+    if ((res = vnode->op->access(vnode, &vn_uid, &vn_gid, &vn_mode)) < 0) {
+        vnode_unref(vnode);
+        return res;
+    }
+
+    vnode_unref(vnode);
+
+    return vfs_access_internal(mode, vn_mode, vn_uid, vn_gid);
 }

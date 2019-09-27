@@ -27,6 +27,8 @@ static const char *errno_str(int r) {
             return "File exists";
         case -ENOSPC:
             return "No space left on device";
+        case -EACCES:
+            return "Permission denied";
         default:
             return "Unknown error";
     }
@@ -242,6 +244,38 @@ static int shell_chown(const char *arg) {
     return vfs_chown(arg, uid, gid);
 }
 
+static int shell_access(const char *arg) {
+    char buf[64];
+    const char *p;
+    int mode = 0;
+
+    printf("rwx = ");
+    if (!(p = fgets(buf, sizeof(buf), stdin))) {
+        return -1;
+    }
+
+    while (*p) {
+        switch (*p++) {
+        case 'r':
+            mode |= R_OK;
+            break;
+        case 'w':
+            mode |= W_OK;
+            break;
+        case 'x':
+            mode |= X_OK;
+            break;
+        case '\n':
+            break;
+        default:
+            fprintf(stderr, "Unknown access flag: %c\n", *(p - 1));
+            return -1;
+        }
+    }
+
+    return vfs_access(arg, mode);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -259,6 +293,7 @@ static struct {
     { "mkdir", shell_mkdir },
     { "chmod", shell_chmod },
     { "chown", shell_chown },
+    { "access", shell_access },
     { "cd", shell_cd },
 };
 

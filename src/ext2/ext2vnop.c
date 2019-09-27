@@ -25,6 +25,7 @@ static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
 static int ext2_vnode_chmod(vnode_t *vn, mode_t mode);
 static int ext2_vnode_chown(vnode_t *vn, uid_t uid, gid_t gid);
 static int ext2_vnode_unlink(vnode_t *at, vnode_t *vn, const char *name);
+static int ext2_vnode_access(vnode_t *vn, uid_t *uid, gid_t *gid, mode_t *mode);
 
 struct vnode_operations ext2_vnode_ops = {
     .find = ext2_vnode_find,
@@ -36,6 +37,7 @@ struct vnode_operations ext2_vnode_ops = {
     .chown = ext2_vnode_chown,
     .stat = ext2_vnode_stat,
     .unlink = ext2_vnode_unlink,
+    .access = ext2_vnode_access,
 
     .opendir = ext2_vnode_opendir,
     .readdir = ext2_vnode_readdir,
@@ -615,6 +617,17 @@ static int ext2_vnode_unlink(vnode_t *at, vnode_t *vn, const char *name) {
     if ((res = ext2_dir_remove_inode(ext2, at, name, ino)) < 0) {
         return res;
     }
+
+    return 0;
+}
+
+static int ext2_vnode_access(vnode_t *vn, uid_t *uid, gid_t *gid, mode_t *mode) {
+    assert(vn && vn->fs_data);
+    struct ext2_inode *inode = vn->fs_data;
+
+    *uid = inode->uid;
+    *gid = inode->gid;
+    *mode = inode->type_perm & 0x1FF;
 
     return 0;
 }

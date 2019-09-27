@@ -25,6 +25,8 @@ struct vfs_node {
 struct vfs_user_context {
     // Process' current working directory
     vnode_t *cwd_vnode;
+    uid_t uid;
+    gid_t gid;
 };
 extern struct vfs_user_context vfs_ctx;
 
@@ -55,6 +57,7 @@ int vfs_stat(const char *path, struct stat *st);
 int vfs_statat(vnode_t *at, const char *path, struct stat *st);
 int vfs_chmod(const char *path, mode_t mode);
 int vfs_chown(const char *path, uid_t uid, gid_t gid);
+int vfs_access(const char *path, int mode);
 // Directroy ops
 int vfs_mkdir(const char *path, mode_t mode);
 struct dirent *vfs_readdir(struct ofile *fd);
