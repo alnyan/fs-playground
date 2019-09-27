@@ -22,6 +22,8 @@ static int ext2_vnode_truncate(struct ofile *fd, size_t length);
 static int ext2_vnode_readdir(struct ofile *fd);
 static void ext2_vnode_destroy(vnode_t *vn);
 static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
+static int ext2_vnode_chmod(vnode_t *vn, mode_t mode);
+static int ext2_vnode_chown(vnode_t *vn, uid_t uid, gid_t gid);
 static int ext2_vnode_unlink(vnode_t *at, vnode_t *vn, const char *name);
 
 struct vnode_operations ext2_vnode_ops = {
@@ -30,6 +32,8 @@ struct vnode_operations ext2_vnode_ops = {
     .mkdir = ext2_vnode_mkdir,
     .destroy = ext2_vnode_destroy,
 
+    .chmod = ext2_vnode_chmod,
+    .chown = ext2_vnode_chown,
     .stat = ext2_vnode_stat,
     .unlink = ext2_vnode_unlink,
 
@@ -521,6 +525,29 @@ static int ext2_vnode_stat(vnode_t *vn, struct stat *st) {
     st->st_ino = vn->fs_number;
 
     return 0;
+}
+
+static int ext2_vnode_chmod(vnode_t *vn, mode_t mode) {
+    assert(vn && vn->fs && vn->fs_data);
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+
+    // Update only access mode
+    inode->type_perm &= ~0x1FF;
+    inode->type_perm |= mode & 0x1FF;
+
+    // Write the inode back
+    return ext2_write_inode(vn->fs, inode, vn->fs_number);
+}
+
+static int ext2_vnode_chown(vnode_t *vn, uid_t uid, gid_t gid) {
+    assert(vn && vn->fs && vn->fs_data);
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+
+    inode->gid = gid;
+    inode->uid = uid;
+
+    // Write the inode back
+    return ext2_write_inode(vn->fs, inode, vn->fs_number);
 }
 
 static int ext2_vnode_unlink(vnode_t *at, vnode_t *vn, const char *name) {

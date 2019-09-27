@@ -813,6 +813,50 @@ int vfs_unlink(const char *path) {
     }
 }
 
+int vfs_chmod(const char *path, mode_t mode) {
+    assert(path);
+    vnode_t *vnode;
+    int res;
+
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+    assert(vnode && vnode->op);
+
+    if (!vnode->op->chmod) {
+        return -EINVAL;
+    }
+
+    res = vnode->op->chmod(vnode, mode);
+
+    vnode_unref(vnode);
+    return res;
+}
+
+int vfs_chown(const char *path, uid_t uid, gid_t gid) {
+    assert(path);
+    vnode_t *vnode;
+    int res;
+
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+    assert(vnode && vnode->op);
+
+    if (!vnode->op->chown) {
+        return -EINVAL;
+    }
+
+    res = vnode->op->chown(vnode, uid, gid);
+
+    vnode_unref(vnode);
+    return res;
+}
+
 struct dirent *vfs_readdir(struct ofile *fd) {
     assert(fd);
     if (!(fd->flags & O_DIRECTORY)) {

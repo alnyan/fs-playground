@@ -211,6 +211,37 @@ static int shell_mkdir(const char *arg) {
     return vfs_mkdir(arg, 0755);
 }
 
+static int shell_chmod(const char *arg) {
+    char buf[64];
+    mode_t mode;
+
+    printf("mode = ");
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return -1;
+    }
+    sscanf(buf, "%o", &mode);
+    return vfs_chmod(arg, mode);
+}
+
+static int shell_chown(const char *arg) {
+    char buf[64];
+    uid_t uid;
+    gid_t gid;
+
+    printf("uid = ");
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return -1;
+    }
+    sscanf(buf, "%d", &uid);
+    printf("gid = ");
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return -1;
+    }
+    sscanf(buf, "%d", &gid);
+
+    return vfs_chown(arg, uid, gid);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -226,6 +257,8 @@ static struct {
     { "trunc", shell_trunc },
     { "unlink", shell_unlink },
     { "mkdir", shell_mkdir },
+    { "chmod", shell_chmod },
+    { "chown", shell_chown },
     { "cd", shell_cd },
 };
 

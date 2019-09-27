@@ -38,10 +38,13 @@ struct vnode_operations {
     void (*destroy) (vnode_t *node);
 
     // File entry operations
+    int (*access) (vnode_t *node, uid_t *uid, gid_t *gid, mode_t *mode);
     int (*creat) (vnode_t *node, const char *name, mode_t mode, int opt, vnode_t **res);
     int (*mkdir) (vnode_t *at, const char *name, mode_t mode);
     int (*unlink) (vnode_t *at, vnode_t *vn, const char *name);
     int (*stat) (vnode_t *node, struct stat *st);
+    int (*chmod) (vnode_t *node, mode_t mode);
+    int (*chown) (vnode_t *node, uid_t uid, gid_t gid);
 
     // Directory access
     int (*opendir) (vnode_t *node, int opt);
