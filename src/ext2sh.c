@@ -172,7 +172,7 @@ static int shell_hello(const char *arg) {
         return -1;
     }
 
-    if ((res = vfs_open(&fd, arg, 0644, O_CREAT | O_WRONLY)) < 0) {
+    if ((res = vfs_open(&fd, arg, 0644, O_TRUNC | O_CREAT | O_WRONLY)) < 0) {
         return res;
     }
 

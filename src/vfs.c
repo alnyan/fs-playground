@@ -453,6 +453,9 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
         return -EROFS;
     }
 
+    // TODO: add uid/gid to vnode and creat() of the
+    // filesystem shall write these to resulting inode
+
     if ((res = at->op->creat(at, name, mode, opt, resvn)) != 0) {
         return res;
     }
@@ -469,7 +472,6 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
 }
 
 int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
-    // TODO: proper support for O_TRUNC
     vnode_t *parent_vnode = NULL;
     vnode_t *vnode = NULL;
     int res;
@@ -551,11 +553,14 @@ int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
 }
 
 int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
+    // TODO: O_APPEND
     assert(vn && vn->op && of);
     int res;
 
     if (opt & O_DIRECTORY) {
         assert((opt & O_ACCMODE) == O_RDONLY);
+        // How does one truncate a directory?
+        assert(!(opt & O_TRUNC));
         assert(!(opt & O_CREAT));
         vnode_ref(vn);
 
@@ -585,29 +590,62 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     // Check flag sanity
     // Can't have O_CREAT here
     if (opt & O_CREAT) {
+        vnode_ref(vn);
+        vnode_unref(vn);
         return -EINVAL;
     }
     // Can't be both (RD|WR) and EX
     if (opt & O_EXEC) {
         if (opt & O_ACCMODE) {
-            return -EINVAL;
+            vnode_ref(vn);
+            vnode_unref(vn);
+            return -EACCES;
         }
     }
 
     // TODO: check permissions here
     if (vn->type == VN_DIR) {
+        vnode_ref(vn);
+        vnode_unref(vn);
         return -EISDIR;
     }
 
-    if (vn->op->open) {
-        if ((res = vn->op->open(vn, opt)) != 0) {
+    of->vnode = vn;
+    of->flags = opt;
+    of->pos = 0;
+
+    if (opt & O_APPEND) {
+        // TODO: rewrite open() to accept struct ofile *
+        // instead of vnode so that open() function of the
+        // vnode can properly set of->pos
+        vnode_ref(vn);
+        vnode_unref(vn);
+        fprintf(stderr, "O_APPEND not yet implemented\n");
+        return -EINVAL;
+    }
+
+    // Check if file has to be truncated before opening it
+    if (opt & O_TRUNC) {
+        if (!vn->op->truncate) {
+            vnode_ref(vn);
+            vnode_unref(vn);
+            return -EINVAL;
+        }
+
+        if ((res = vn->op->truncate(of, 0)) != 0) {
+            vnode_ref(vn);
+            vnode_unref(vn);
             return res;
         }
     }
 
-    of->flags = opt;
-    of->vnode = vn;
-    of->pos = 0;
+    if (vn->op->open) {
+        if ((res = vn->op->open(vn, opt)) != 0) {
+            vnode_ref(vn);
+            vnode_unref(vn);
+            return res;
+        }
+    }
 
     vnode_ref(vn);
     return 0;
