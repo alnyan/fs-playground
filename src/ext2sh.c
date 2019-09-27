@@ -276,6 +276,29 @@ static int shell_access(const char *arg) {
     return vfs_access(arg, mode);
 }
 
+static int shell_setuid(const char *arg) {
+    uid_t uid;
+    sscanf(arg, "%d", &uid);
+
+    vfs_ctx.uid = uid;
+
+    return 0;
+}
+
+static int shell_setgid(const char *arg) {
+    gid_t gid;
+    sscanf(arg, "%d", &gid);
+
+    vfs_ctx.gid = gid;
+
+    return 0;
+}
+
+static int shell_me(const char *arg) {
+    printf("me: uid = %d, gid = %d\n", vfs_ctx.uid, vfs_ctx.gid);
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -294,6 +317,9 @@ static struct {
     { "chmod", shell_chmod },
     { "chown", shell_chown },
     { "access", shell_access },
+    { "setuid", shell_setuid },
+    { "setgid", shell_setgid },
+    { "me", shell_me },
     { "cd", shell_cd },
 };
 

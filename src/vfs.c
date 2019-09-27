@@ -14,6 +14,7 @@ struct vfs_user_context vfs_ctx;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
 static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid);
+static int vfs_vnode_access(vnode_t *vn, int mode);
 
 static int vfs_setcwd_rel(vnode_t *at, const char *path) {
     // cwd is absolute path
@@ -27,6 +28,11 @@ static int vfs_setcwd_rel(vnode_t *at, const char *path) {
     if (new_cwd->type != VN_DIR) {
         vnode_unref(new_cwd);
         return -ENOTDIR;
+    }
+
+    if ((res = vfs_vnode_access(new_cwd, X_OK)) < 0) {
+        vnode_unref(new_cwd);
+        return res;
     }
 
     if (vfs_ctx.cwd_vnode) {
@@ -107,6 +113,24 @@ static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
     }
 
     return 0;
+}
+
+static int vfs_vnode_access(vnode_t *vn, int mode) {
+    mode_t vn_mode;
+    uid_t vn_uid;
+    gid_t vn_gid;
+    int res;
+
+    // Filesystem does not have permissions
+    if (!vn->op || !vn->op->access) {
+        return 0;
+    }
+
+    if ((res = vn->op->access(vn, &vn_uid, &vn_gid, &vn_mode)) < 0) {
+        return res;
+    }
+
+    return vfs_access_internal(mode, vn_mode, vn_uid, vn_gid);
 }
 
 void vfs_init(void) {
@@ -576,6 +600,10 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         return -ENOTDIR;
     }
 
+    if (vfs_vnode_access(parent_vnode, W_OK) < 0) {
+        return -EACCES;
+    }
+
     printf("Path: %s\n", path);
     path = vfs_path_basename(path);
 
@@ -621,6 +649,10 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     // TODO: O_APPEND
     assert(vn && vn->op && of);
     int res;
+
+    if (vfs_vnode_access(vn, vfs_open_access_mask(opt)) < 0) {
+        return -EACCES;
+    }
 
     if (opt & O_DIRECTORY) {
         assert((opt & O_ACCMODE) == O_RDONLY);
@@ -774,6 +806,10 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     assert(fd);
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
+    // XXX: should these be checked on every read?
+    if (vfs_vnode_access(vn, R_OK) < 0) {
+        return -EACCES;
+    }
 
     if (fd->flags & O_DIRECTORY) {
         return -EISDIR;
@@ -799,6 +835,11 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
+    // XXX: should these be checked on every write?
+    if (vfs_vnode_access(vn, W_OK) < 0) {
+        return -EACCES;
+    }
+
     if (fd->flags & O_DIRECTORY) {
         return -EISDIR;
     }
@@ -819,6 +860,10 @@ int vfs_truncate(struct ofile *of, size_t length) {
     }
     vnode_t *vn = of->vnode;
     assert(vn && vn->op);
+    // XXX: should these be checked on every write?
+    if (vfs_vnode_access(vn, W_OK) < 0) {
+        return -EACCES;
+    }
 
     if (!vn->op->truncate) {
         return -EINVAL;
@@ -890,6 +935,22 @@ int vfs_chmod(const char *path, mode_t mode) {
     vnode_ref(vnode);
     assert(vnode && vnode->op);
 
+    if (vnode->op->access) {
+        mode_t vn_mode;
+        uid_t vn_uid;
+        gid_t vn_gid;
+
+        if ((res = vnode->op->access(vnode, &vn_uid, &vn_gid, &vn_mode)) < 0) {
+            return res;
+        }
+
+        // To chmod, the uid of the user has to match
+        // the node's one
+        if ((vn_uid != vfs_ctx.uid) && (vfs_ctx.uid != 0)) {
+            return -EACCES;
+        }
+    }
+
     if (!vnode->op->chmod) {
         return -EINVAL;
     }
@@ -904,6 +965,11 @@ int vfs_chown(const char *path, uid_t uid, gid_t gid) {
     assert(path);
     vnode_t *vnode;
     int res;
+
+    if (vfs_ctx.uid != 0) {
+        // For now, only root can change ownership of the nodes
+        return -EACCES;
+    }
 
     if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
         return res;
@@ -922,6 +988,7 @@ int vfs_chown(const char *path, uid_t uid, gid_t gid) {
     return res;
 }
 
+// TODO: change signature so it can return errno
 struct dirent *vfs_readdir(struct ofile *fd) {
     assert(fd);
     if (!(fd->flags & O_DIRECTORY)) {
@@ -929,6 +996,10 @@ struct dirent *vfs_readdir(struct ofile *fd) {
     }
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
+
+    if (vfs_vnode_access(vn, R_OK) < 0) {
+        return NULL;
+    }
 
     if (!vn->op->readdir) {
         return NULL;
@@ -986,6 +1057,12 @@ int vfs_mkdir(const char *path, mode_t mode) {
         // Parent is not a directory
         vnode_unref(parent_vnode);
         return -ENOTDIR;
+    }
+
+    // Need write permission
+    if ((res = vfs_vnode_access(parent_vnode, W_OK)) < 0) {
+        vnode_unref(parent_vnode);
+        return res;
     }
 
     printf("Path: %s\n", path);
