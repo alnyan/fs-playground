@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "fs.h"
 
 #define EXT2_MAGIC      ((uint16_t) 0xEF53)
 
@@ -119,3 +120,27 @@ struct ext2_dirent {
 } __attribute__((packed));
 
 void ext2_class_init(void);
+enum vnode_type ext2_inode_type(struct ext2_inode *i);
+
+// Implemented in ext2blk.c
+int ext2_write_superblock(fs_t *ext2);
+int ext2_read_block(fs_t *ext2, uint32_t block_no, void *buf);
+int ext2_write_block(fs_t *ext2, uint32_t block_no, const void *buf);
+int ext2_read_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t index, void *buf);
+int ext2_write_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t index, const void *buf);
+int ext2_read_inode(fs_t *ext2, struct ext2_inode *inode, uint32_t ino);
+int ext2_write_inode(fs_t *ext2, const struct ext2_inode *inode, uint32_t ino);
+
+// Implemented in ext2alloc.c
+int ext2_alloc_block(fs_t *ext2, uint32_t *block_no);
+int ext2_free_block(fs_t *ext2, uint32_t block_no);
+int ext2_inode_alloc_block(fs_t *ext2, struct ext2_inode *inode, uint32_t ino, uint32_t index);
+int ext2_free_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t ino, uint32_t index);
+int ext2_free_inode(fs_t *ext2, uint32_t ino);
+int ext2_alloc_inode(fs_t *ext2, uint32_t *ino);
+
+// Implemented in ext2dir.c
+int ext2_dir_add_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino);
+int ext2_dir_remove_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino);
+
+extern struct vnode_operations ext2_vnode_ops;

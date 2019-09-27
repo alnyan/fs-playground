@@ -12,7 +12,11 @@ LIBTESTBLK=$(O)/libtestblk.a
 LIBTESTBLK_OBJS=$(O)/testblk.o
 # libext2.a - ext2 filesystem implementation
 LIBEXT2=$(O)/libext2.a
-LIBEXT2_OBJS=$(O)/ext2.o
+LIBEXT2_OBJS=$(O)/ext2/ext2.o \
+			 $(O)/ext2/ext2dir.o \
+			 $(O)/ext2/ext2vnop.o \
+			 $(O)/ext2/ext2alloc.o \
+			 $(O)/ext2/ext2blk.o
 
 # An applcation for testing all of these
 # libraries
@@ -27,7 +31,7 @@ CFLAGS=-Iinclude
 all: mkdirs $(EXT2SH)
 
 mkdirs:
-	mkdir -p $(O)
+	mkdir -p $(O)/ext2
 	mkdir -p stage
 
 clean:
