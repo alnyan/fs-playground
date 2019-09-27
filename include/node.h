@@ -39,6 +39,7 @@ struct vnode_operations {
 
     // File entry operations
     int (*creat) (vnode_t *node, const char *name, mode_t mode, int opt, vnode_t **res);
+    int (*unlink) (vnode_t *at, vnode_t *vn, const char *name);
     int (*stat) (vnode_t *node, struct stat *st);
 
     // Directory access

@@ -42,6 +42,9 @@ image: mkdirs
 		-d stage \
 		$(O)/ext2.img
 
+fsck:
+	/sbin/fsck.ext2 -n $(O)/ext2.img
+
 $(EXT2SH): $(EXT2SH_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(EXT2SH_OBJS)
 

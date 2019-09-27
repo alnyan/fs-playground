@@ -780,3 +780,54 @@ int vfs_truncate(struct ofile *of, size_t length) {
 
     return vn->op->truncate(of, length);
 }
+
+int vfs_unlink(const char *path) {
+    // XXX: validate this with removing mounted roots
+    assert(path);
+    // Find the vnode to unlink
+    int res;
+    vnode_t *parent_vnode, *vnode;
+
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+        return res;
+    }
+
+    assert(vnode && vnode->op);
+    vnode_ref(vnode);
+
+    // Get node parent
+    struct vfs_node *node = vnode->tree_node;
+    assert(node);
+
+    if (!node->parent) {
+        // Trying to unlink root node?
+        vnode_unref(vnode);
+        return -EACCES;
+    }
+
+    parent_vnode = node->parent->vnode;
+    vnode_ref(parent_vnode);
+
+    if (parent_vnode->op->unlink) {
+        // TODO: handle
+        //       unlink("path/to/node/./.")
+        path = vfs_path_basename(path);
+        assert(path);
+
+        if ((res = parent_vnode->op->unlink(parent_vnode, vnode, path)) < 0) {
+            vnode_unref(vnode);
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        vnode_unref(vnode);
+        vnode_unref(parent_vnode);
+        return 0;
+    } else {
+        fprintf(stderr, "File system does not implement unlink()\n");
+        // File node does not support unlinking
+        vnode_unref(vnode);
+        vnode_unref(parent_vnode);
+        return -EINVAL;
+    }
+}

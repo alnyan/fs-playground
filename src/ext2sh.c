@@ -203,6 +203,10 @@ static int shell_trunc(const char *arg) {
     return 0;
 }
 
+static int shell_unlink(const char *arg) {
+    return vfs_unlink(arg);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -216,6 +220,7 @@ static struct {
     { "touch", shell_touch },
     { "hello", shell_hello },
     { "trunc", shell_trunc },
+    { "unlink", shell_unlink },
     { "cd", shell_cd },
 };
 
