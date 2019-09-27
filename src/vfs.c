@@ -747,25 +747,6 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     return vn->op->write(fd, buf, count);
 }
 
-struct dirent *vfs_readdir(struct ofile *fd) {
-    assert(fd);
-    if (!(fd->flags & O_DIRECTORY)) {
-        return NULL;
-    }
-    vnode_t *vn = fd->vnode;
-    assert(vn && vn->op);
-
-    if (!vn->op->readdir) {
-        return NULL;
-    }
-
-    if (vn->op->readdir(fd) == 0) {
-        return (struct dirent *) fd->dirent_buf;
-    }
-
-    return NULL;
-}
-
 int vfs_truncate(struct ofile *of, size_t length) {
     assert(of);
     if ((of->flags & O_ACCMODE) == O_RDONLY) {
@@ -830,4 +811,88 @@ int vfs_unlink(const char *path) {
         vnode_unref(parent_vnode);
         return -EINVAL;
     }
+}
+
+struct dirent *vfs_readdir(struct ofile *fd) {
+    assert(fd);
+    if (!(fd->flags & O_DIRECTORY)) {
+        return NULL;
+    }
+    vnode_t *vn = fd->vnode;
+    assert(vn && vn->op);
+
+    if (!vn->op->readdir) {
+        return NULL;
+    }
+
+    if (vn->op->readdir(fd) == 0) {
+        return (struct dirent *) fd->dirent_buf;
+    }
+
+    return NULL;
+}
+
+int vfs_mkdir(const char *path, mode_t mode) {
+    vnode_t *parent_vnode = NULL;
+    vnode_t *vnode = NULL;
+    int res;
+
+    // Check if a directory with such name already exists
+    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) == 0) {
+        vnode_ref(vnode);
+        vnode_unref(vnode);
+        return -EEXIST;
+    }
+
+    // Just copypasted this from creat()
+    if (*path == '/') {
+        // Get parent vnode
+        char parent_path[1024];
+        vfs_path_parent(parent_path, path);
+
+        if ((res = vfs_find(NULL, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            // Parent doesn't exist, too - error
+            return res;
+        }
+    } else {
+        char parent_path[1024];
+        vfs_path_parent(parent_path, path);
+
+        if (!*parent_path) {
+            parent_path[0] = '.';
+            parent_path[1] = 0;
+        }
+
+        // Find parent
+        if ((res = vfs_find(vfs_ctx.cwd_vnode, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            return res;
+        }
+    }
+
+    vnode_ref(parent_vnode);
+
+    if (parent_vnode->type != VN_DIR) {
+        // Parent is not a directory
+        vnode_unref(parent_vnode);
+        return -ENOTDIR;
+    }
+
+    printf("Path: %s\n", path);
+    path = vfs_path_basename(path);
+
+    if (!path) {
+        vnode_unref(parent_vnode);
+        return -EINVAL;
+    }
+
+    if (!parent_vnode->op || !parent_vnode->op->mkdir) {
+        vnode_unref(parent_vnode);
+        return -EINVAL;
+    }
+
+    res = parent_vnode->op->mkdir(parent_vnode, path, mode);
+    vnode_unref(parent_vnode);
+    return res;
 }

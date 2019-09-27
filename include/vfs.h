@@ -53,4 +53,5 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count);
 ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count);
 int vfs_unlink(const char *path);
 // Directroy ops
+int vfs_mkdir(const char *path, mode_t mode);
 struct dirent *vfs_readdir(struct ofile *fd);

@@ -207,6 +207,10 @@ static int shell_unlink(const char *arg) {
     return vfs_unlink(arg);
 }
 
+static int shell_mkdir(const char *arg) {
+    return vfs_mkdir(arg, 0755);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -221,6 +225,7 @@ static struct {
     { "hello", shell_hello },
     { "trunc", shell_trunc },
     { "unlink", shell_unlink },
+    { "mkdir", shell_mkdir },
     { "cd", shell_cd },
 };
 

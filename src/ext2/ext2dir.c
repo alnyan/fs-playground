@@ -143,6 +143,8 @@ int ext2_dir_remove_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t i
             if (current_dirent->name_len == strlen(name) &&
                 !strncmp(current_dirent->name, name, current_dirent->name_len)) {
                 // Found matching dirent
+                // Sanity
+                assert(current_dirent->ino == ino);
 
                 if (current_dirent->len + off >= sb->block_size) {
                     // It's the last node in the list
