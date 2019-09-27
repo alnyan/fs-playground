@@ -7,19 +7,14 @@
 #include <errno.h>
 #include <stdio.h>
 
-// XXX:
-//      Basically, the driver written by me does not yet
-//      support directories larger than one block
-// Append an inode to directory
+// Add an inode to directory
 int ext2_dir_add_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino) {
     struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
     char block_buffer[sb->block_size];
     struct ext2_inode *dir_inode = dir->fs_data;
-    struct ext2_dirent *entptr, *resent;
+    struct ext2_dirent *current_dirent, *result_dirent;
     int res;
     int found = 0;
-    int32_t write_block_index = -1;
-    size_t resent_len = 0;
 
     size_t req_free = strlen(name) + sizeof(struct ext2_dirent);
     // Align up 4 bytes
@@ -28,149 +23,149 @@ int ext2_dir_add_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino)
     // Try reading parent dirent blocks to see if any has
     // some space to fit our file
     size_t dir_size_blocks = (dir_inode->size_lower + sb->block_size - 1) / sb->block_size;
-    assert(dir_size_blocks == 1);
-
     for (size_t i = 0; i < dir_size_blocks; ++i) {
+        current_dirent = NULL;
+        result_dirent = NULL;
+        found = 0;
+        size_t off = 0;
+
+        // Read directory content block
         if ((res = ext2_read_inode_block(ext2, dir_inode, i, block_buffer)) < 0) {
             return res;
         }
 
-        entptr = NULL;
-        size_t off = 0;
+        // Check if any of the entries can be split to fit our entry
         while (off < sb->block_size) {
-            entptr = (struct ext2_dirent *) &block_buffer[off];
-            if (entptr->len == 0) {
-                break;
-            }
-            if (!entptr->ino) {
-                // Possibly free space
-                break;
+            current_dirent = (struct ext2_dirent *) &block_buffer[off];
+            if (current_dirent->ino == 0) {
+                printf("ext2: found dirent with ino = 0\n");
             }
 
-            ssize_t extra = entptr->len - sizeof(struct ext2_dirent) - entptr->name_len;
-            // Align up 4 bytes
-            extra = (extra + 3) & ~3;
+            // Check how much space we need to still store the entry
+            size_t real_len = current_dirent->name_len + sizeof(struct dirent);
+            real_len = (real_len + 3) & ~3;
 
-            if (extra > req_free) {
-                // Resize previous entry
-                entptr->len = (entptr->name_len + sizeof(struct ext2_dirent) + 3) & ~3;
-                off += entptr->len;
-                resent = (struct ext2_dirent *) &block_buffer[off];
-                resent_len = sb->block_size - off;
-                write_block_index = i;
-                found = 1;
-                break;
+            // And check how much is left to fit our entry
+            if (real_len < current_dirent->len /* Sanity? */ &&
+                current_dirent->len - real_len >= req_free) {
+                // Yay, can fit our dirent in there
+
+                // Sanity check that we're aligned properly
+                assert(((off + real_len) & 3) == 0);
+                result_dirent = (struct ext2_dirent *) &block_buffer[off + real_len];
+                result_dirent->len = current_dirent->len - real_len;
+                result_dirent->name_len = strlen(name);
+                result_dirent->type_ind = 0;
+                result_dirent->ino = ino;
+                strncpy(result_dirent->name, name, result_dirent->name_len);
+                current_dirent->len = real_len;
+
+                if ((res = ext2_write_inode_block(ext2, dir_inode, i, block_buffer)) < 0) {
+                    return res;
+                }
+
+                return 0;
             }
 
-            off += entptr->len;
-        }
-
-        if (found) {
-            break;
+            off += current_dirent->len;
         }
     }
 
-    if (!found) {
-        // Couldn't insert an inode
-        return -ENOSPC;
-    }
-
-    // Place new entry
-    resent->len = resent_len;
-    resent->ino = ino;
-    resent->type_ind = 0;
-    resent->name_len = strlen(name);
-    strncpy(resent->name, name, resent->name_len);
-
-    assert(write_block_index != -1);
-    if ((res = ext2_write_inode_block(ext2, dir_inode, write_block_index, block_buffer)) < 0) {
+    dir_inode->size_lower += sb->block_size;
+    if ((res = ext2_inode_alloc_block(ext2, dir_inode, dir->fs_number, dir_size_blocks)) < 0) {
+        dir_inode->size_lower -= sb->block_size;
         return res;
     }
 
-    return 0;
+    memset(block_buffer, 0, sb->block_size);
+    current_dirent = (struct ext2_dirent *) block_buffer;
+    current_dirent->ino = ino;
+    current_dirent->len = sb->block_size;
+    current_dirent->name_len = strlen(name);
+    current_dirent->type_ind = 0;
+    strncpy(current_dirent->name, name, current_dirent->name_len);
+
+    return ext2_write_inode_block(ext2, dir_inode, dir_size_blocks, block_buffer);
+}
+
+// Not only free the block itself, but also remove it from index list
+static int ext2_free_block_index(fs_t *ext2, struct ext2_inode *inode, uint32_t index, uint32_t ino, size_t sz) {
+    if (index >= 12) {
+        // TODO: Implement this
+        abort();
+    }
+
+    int res;
+    uint32_t block_no = inode->direct_blocks[index];
+
+    if ((res = ext2_free_block(ext2, block_no)) < 0) {
+        return res;
+    }
+
+    // Shift direct indexed blocks
+    for (uint32_t i = index; i < 11; ++i) {
+        inode->direct_blocks[i] = inode->direct_blocks[i + 1];
+    }
+    // TODO: inode->direct_blocks[11] becomes the first block of indirect block
+    inode->direct_blocks[11] = 0;
+
+    inode->size_lower -= sz;
+
+    return ext2_write_inode(ext2, inode, ino);
 }
 
 int ext2_dir_remove_inode(fs_t *ext2, vnode_t *dir, const char *name, uint32_t ino) {
     struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
     char block_buffer[sb->block_size];
     struct ext2_inode *dir_inode = dir->fs_data;
-    struct ext2_dirent *entptr, *to_reloc, *prev;
+    struct ext2_dirent *current_dirent, *prev_dirent;
     int res;
-    int is_first;
-    int found = 0;
 
     size_t dir_size_blocks = (dir_inode->size_lower + sb->block_size - 1) / sb->block_size;
-    assert(dir_size_blocks == 1);
 
     for (size_t i = 0; i < dir_size_blocks; ++i) {
         if ((res = ext2_read_inode_block(ext2, dir_inode, i, block_buffer)) < 0) {
             return res;
         }
-        is_first = 1;
-        prev = NULL;
-        entptr = NULL;
 
-        uint32_t off = 0;
+        size_t off = 0;
+        current_dirent = NULL;
+        prev_dirent = NULL;
+
         while (off < sb->block_size) {
-            prev = entptr;
-            entptr = (struct ext2_dirent *) &block_buffer[off];
-            if (entptr->len == 0) {
-                break;
-            }
-            if (!entptr->ino) {
-                // Possibly free space
-                break;
+            prev_dirent = current_dirent;
+            current_dirent = (struct ext2_dirent *) &block_buffer[off];
+
+            if (current_dirent->ino == 0) {
+                printf("ext2: found dirent with ino = 0\n");
             }
 
-            if (entptr->name_len == strlen(name) && !strncmp(name, entptr->name, entptr->name_len)) {
-                found = 1;
-                break;
+            if (current_dirent->name_len == strlen(name) &&
+                !strncmp(current_dirent->name, name, current_dirent->name_len)) {
+                // Found matching dirent
+
+                if (current_dirent->len + off >= sb->block_size) {
+                    // It's the last node in the list
+                    if (!prev_dirent) {
+                        return ext2_free_block_index(ext2, dir_inode, i, dir->fs_number, sb->block_size);
+                    }
+
+                    // Resize the previous node
+                    prev_dirent->len += current_dirent->len;
+                    return ext2_write_inode_block(ext2, dir_inode, i, block_buffer);
+                } else {
+                    // It's not the last one - relocate the next entry
+                    uint32_t len = current_dirent->len;
+                    struct ext2_dirent *next_dirent = (struct ext2_dirent *) &block_buffer[off + len];
+                    memmove(current_dirent, next_dirent, next_dirent->len);
+                    next_dirent = current_dirent;
+                    next_dirent->len += len;
+                    assert(((off + len) & 3) == 0);
+                    return ext2_write_inode_block(ext2, dir_inode, i, block_buffer);
+                }
             }
 
-            is_first = 0;
-            off += entptr->len;
-        }
-
-        if (!found) {
-            continue;
-        }
-
-        assert(entptr);
-
-        // Sanity check that we're actually removing
-        // the requested inode reference
-        assert(entptr->ino == ino);
-
-        // Get rid of the found entry
-        // Find the next entry to join with
-        if (off + entptr->len >= sb->block_size) {
-            // We're the last entry
-
-            if (is_first) {
-                // If we're also the first one - the entire block is free now
-                // TODO: somehow free blocks that are in the middle of the directory
-                // This should not be possible for the first block of any
-                // directory as it contains "." and ".."
-                printf("That's the first and the last node\n");
-                abort();
-            } else {
-                assert(prev);
-                prev->len += entptr->len;
-                printf("Removing last node\n");
-                // Write the block back
-                return ext2_write_inode_block(ext2, dir_inode, i, block_buffer);
-            }
-        } else {
-            uint32_t next_off = off + entptr->len;
-            to_reloc = (struct ext2_dirent *) &block_buffer[next_off];
-            uint32_t next_len = to_reloc->len;
-            uint32_t total = next_len + entptr->len;
-
-            memmove(&block_buffer[off], &block_buffer[next_off], next_len);
-            entptr->len = total;
-
-            // Write the block back
-            return ext2_write_inode_block(ext2, dir_inode, i, block_buffer);
+            off += current_dirent->len;
         }
     }
 

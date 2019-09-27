@@ -323,6 +323,11 @@ static int ext2_vnode_truncate(struct ofile *fd, size_t length) {
     struct ext2_extsb *sb = vn->fs->fs_private;
     int res;
 
+    if (length == inode->size_lower) {
+        // Already good
+        return 0;
+    }
+
     size_t was_blocks = (inode->size_lower + sb->block_size - 1) / sb->block_size;
     size_t now_blocks = (length + sb->block_size - 1) / sb->block_size;
     ssize_t delta_blocks = now_blocks - was_blocks;
