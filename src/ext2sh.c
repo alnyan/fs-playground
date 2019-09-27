@@ -185,6 +185,24 @@ static int shell_hello(const char *arg) {
     return 0;
 }
 
+static int shell_trunc(const char *arg) {
+    struct ofile fd;
+    int res;
+
+    // TODO: implement O_TRUNC
+    if ((res = vfs_open(&fd, arg, 0644, O_WRONLY)) < 0) {
+        return res;
+    }
+
+    if ((res = vfs_truncate(&fd, 0)) < 0) {
+        return res;
+    }
+
+    vfs_close(&fd);
+
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -197,6 +215,7 @@ static struct {
     { "setcwd", shell_setcwd },
     { "touch", shell_touch },
     { "hello", shell_hello },
+    { "trunc", shell_trunc },
     { "cd", shell_cd },
 };
 

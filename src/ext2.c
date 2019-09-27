@@ -18,6 +18,7 @@ static int ext2_vnode_open(vnode_t *vn, int opt);
 static int ext2_vnode_opendir(vnode_t *vn, int opt);
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count);
 static ssize_t ext2_vnode_write(struct ofile *fd, const void *buf, size_t count);
+static int ext2_vnode_truncate(struct ofile *fd, size_t length);
 static int ext2_vnode_readdir(struct ofile *fd);
 static void ext2_vnode_destroy(vnode_t *vn);
 static int ext2_vnode_stat(vnode_t *vn, struct stat *st);
@@ -35,6 +36,7 @@ static struct vnode_operations ext2_vnode_ops = {
     .open = ext2_vnode_open,
     .read = ext2_vnode_read,
     .write = ext2_vnode_write,
+    .truncate = ext2_vnode_truncate,
 };
 
 static enum vnode_type ext2_inode_type(struct ext2_inode *i) {
@@ -262,6 +264,53 @@ static int ext2_alloc_block(fs_t *ext2, uint32_t *block_no) {
     return 0;
 }
 
+static int ext2_free_block(fs_t *ext2, uint32_t block_no) {
+    assert(block_no);
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+    char block_buffer[sb->block_size];
+    int res;
+
+    uint32_t block_group_no = (block_no - 1) / sb->sb.block_group_size_blocks;
+    uint32_t block_no_in_group = (block_no - 1) % sb->sb.block_group_size_blocks;
+
+    // Read block ussge bitmap block
+    if ((res = ext2_read_block(ext2,
+                               sb->block_group_descriptor_table[block_group_no].block_usage_bitmap_block,
+                               block_buffer)) < 0) {
+        return res;
+    }
+
+    // Update the bitmap
+    assert(((uint64_t *) block_buffer)[block_no_in_group / 64] & (1 << (block_no_in_group % 64)));
+    ((uint64_t *) block_buffer)[block_no_in_group / 64] &= ~(1 << (block_no_in_group % 64));
+
+    if ((res = ext2_write_block(ext2,
+                                sb->block_group_descriptor_table[block_group_no].block_usage_bitmap_block,
+                                block_buffer)) < 0) {
+        return res;
+    }
+
+    // Update BGDT
+    ++sb->block_group_descriptor_table[block_group_no].free_blocks;
+    for (size_t i = 0; i < sb->block_group_descriptor_table_size_blocks; ++i) {
+        void *blk_ptr = (void *) (((uintptr_t) sb->block_group_descriptor_table) + i * sb->block_size);
+
+        if ((res = ext2_write_block(ext2, sb->block_group_descriptor_table_block + i, blk_ptr)) < 0) {
+            return res;
+        }
+    }
+
+    // Update global block count
+    ++sb->sb.free_block_count;
+    if ((res = ext2_write_superblock(ext2)) < 0) {
+        return res;
+    }
+
+    printf("Freed block #%u\n", block_no);
+
+    return 0;
+}
+
 static int ext2_inode_alloc_block(fs_t *ext2, struct ext2_inode *inode, uint32_t ino, uint32_t index) {
     if (index >= 12) {
         fprintf(stderr, "Not implemented\n");
@@ -280,6 +329,30 @@ static int ext2_inode_alloc_block(fs_t *ext2, struct ext2_inode *inode, uint32_t
     inode->direct_blocks[index] = block_no;
 
     // Flush changes to the device
+    return ext2_write_inode(ext2, inode, ino);
+}
+
+static int ext2_free_inode_block(fs_t *ext2, struct ext2_inode *inode, uint32_t ino, uint32_t index) {
+    if (index >= 12) {
+        fprintf(stderr, "Not implemented\n");
+        abort();
+    }
+    // All sanity checks regarding whether the block is present
+    // at all are left to the caller
+
+    int res;
+    uint32_t block_no;
+
+    // Get block number
+    block_no = inode->direct_blocks[index];
+
+    // Free the block
+    if ((res = ext2_free_block(ext2, block_no)) < 0) {
+        return res;
+    }
+
+    // Write updated inode
+    inode->direct_blocks[index] = 0;
     return ext2_write_inode(ext2, inode, ino);
 }
 
@@ -615,12 +688,6 @@ static int ext2_vnode_opendir(vnode_t *vn, int opt) {
 }
 
 static int ext2_vnode_open(vnode_t *vn, int opt) {
-    // XXX:
-    //  When opening a file for reading,
-    //  we still don't truncate, move fd->pos
-    //  to the end of the file, so the blocks
-    //  don't get used
-
     assert(vn->type == VN_REG);
     return 0;
 }
@@ -698,6 +765,7 @@ static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt,
 }
 
 #define MIN(x, y) ((x) > (y) ? (y) : (x))
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
 static ssize_t ext2_vnode_read(struct ofile *fd, void *buf, size_t count) {
     vnode_t *vn = fd->vnode;
     struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
@@ -783,7 +851,7 @@ static ssize_t ext2_vnode_write(struct ofile *fd, const void *buf, size_t count)
             remaining -= need_write;
         }
 
-        inode->size_lower = fd->pos;
+        inode->size_lower = MAX(fd->pos, inode->size_lower);
         current_block += can_write_blocks;
     }
 
@@ -829,6 +897,49 @@ static ssize_t ext2_vnode_write(struct ofile *fd, const void *buf, size_t count)
     }
 
     return written;
+}
+
+static int ext2_vnode_truncate(struct ofile *fd, size_t length) {
+    vnode_t *vn = fd->vnode;
+    fs_t *ext2 = vn->fs;
+    struct ext2_inode *inode = (struct ext2_inode *) vn->fs_data;
+    struct ext2_extsb *sb = vn->fs->fs_private;
+    int res;
+
+    size_t was_blocks = (inode->size_lower + sb->block_size - 1) / sb->block_size;
+    size_t now_blocks = (length + sb->block_size - 1) / sb->block_size;
+    ssize_t delta_blocks = now_blocks - was_blocks;
+
+    if (delta_blocks < 0) {
+        // Free truncated blocks
+        for (size_t i = now_blocks; i < was_blocks; ++i) {
+            // Modify inode right here because ext2_free_inode_block will
+            // flush these changes to disk so we don't have to write it
+            // twice
+            inode->size_lower -= sb->block_size;
+            if ((res = ext2_free_inode_block(ext2, inode, vn->fs_number, i)) < 0) {
+                // Put the block size back, couldn't free it
+                inode->size_lower += sb->block_size;
+                return res;
+            }
+        }
+
+        // All the blocks were successfully freed, can set proper file length
+        if (inode->size_lower != length) {
+            // If requested size is not block-aligned, we need to write inode
+            // struct to disk once again
+            inode->size_lower = length;
+
+            if ((res = ext2_write_inode(ext2, inode, vn->fs_number)) < 0) {
+                return res;
+            }
+        }
+
+        return 0;
+    } else {
+        fprintf(stderr, "ext2: truncate upwards not yet implemented\n");
+        return -EINVAL;
+    }
 }
 
 // TODO: replace this with getdents

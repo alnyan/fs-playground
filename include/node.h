@@ -9,12 +9,6 @@
 #if !defined(__linux__)
 #include "dirent.h"
 #include "stat.h"
-
-#define O_RDONLY    (1 << 0)
-#define O_WRONLY    (1 << 1)
-#define O_RDWR      (O_RDONLY | O_WRONLY)
-#define O_DIRECTORY (1 << 14)
-#define O_CREAT     (1 << 15)
 #else
 #include <fcntl.h>
 #include <dirent.h>
@@ -56,6 +50,7 @@ struct vnode_operations {
     void (*close) (struct ofile *fd);
     ssize_t (*read) (struct ofile *fd, void *buf, size_t count);
     ssize_t (*write) (struct ofile *fd, const void *buf, size_t count);
+    int (*truncate) (struct ofile *fd, size_t length);
 };
 
 struct vnode {

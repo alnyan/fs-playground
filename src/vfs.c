@@ -727,3 +727,18 @@ struct dirent *vfs_readdir(struct ofile *fd) {
 
     return NULL;
 }
+
+int vfs_truncate(struct ofile *of, size_t length) {
+    assert(of);
+    if ((of->flags & O_ACCMODE) == O_RDONLY) {
+        return -EINVAL;
+    }
+    vnode_t *vn = of->vnode;
+    assert(vn && vn->op);
+
+    if (!vn->op->truncate) {
+        return -EINVAL;
+    }
+
+    return vn->op->truncate(of, length);
+}

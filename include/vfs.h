@@ -42,6 +42,7 @@ struct vfs_node *vfs_node_create(const char *name, vnode_t *vn);
 int vfs_mount(const char *at, void *blk, const char *fs_name, const char *fs_opt);
 int vfs_umount(const char *target);
 // File ops
+int vfs_truncate(struct ofile *fd, size_t length);
 int vfs_statat(vnode_t *at, const char *path, struct stat *st);
 int vfs_stat(const char *path, struct stat *st);
 int vfs_creat(struct ofile *fd, const char *path, int mode, int opt);
