@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <stdio.h>
 #include "vfs.h"
 #include "ext2.h"
@@ -241,7 +242,17 @@ found:
     }
 }
 
-int main() {
+int main(int argc, const char **argv) {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <image-file>\n", argv[0]);
+        return -1;
+    }
+
+    if (access(argv[1], O_RDONLY) != 0) {
+        perror(argv[1]);
+        return -1;
+    }
+
     int res;
     struct ofile fd0;
     struct stat st0;
@@ -250,7 +261,7 @@ int main() {
 
     vfs_init();
     ext2_class_init();
-    testblk_init("ext2.img");
+    testblk_init(argv[1]);
 
     // Mount ext2 as rootfs
     if ((res = vfs_mount("/", &testblk_dev, "ext2", NULL)) != 0) {
