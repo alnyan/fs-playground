@@ -5,15 +5,24 @@
 #pragma once
 #include <stdint.h>
 #include <sys/types.h>
+
+#if !defined(__linux__)
 #include "dirent.h"
 #include "stat.h"
 
 #define O_RDONLY    (1 << 0)
 #define O_WRONLY    (1 << 1)
 #define O_RDWR      (O_RDONLY | O_WRONLY)
-#define O_EXEC      (1 << 2)
 #define O_DIRECTORY (1 << 14)
 #define O_CREAT     (1 << 15)
+#else
+#include <fcntl.h>
+#include <dirent.h>
+#endif
+
+// O_EXEC is a special one for opening a node for
+//        execution
+#define O_EXEC      (1 << 2)
 
 struct ofile;
 typedef struct vnode vnode_t;

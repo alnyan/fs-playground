@@ -33,7 +33,7 @@ mkdirs:
 clean:
 	rm -rf $(O)
 
-image:
+image: mkdirs
 	rm -f $(O)/ext2.img
 	# This will produce 128MiB image
 	dd if=/dev/zero of=$(O)/ext2.img bs=4K count=32768

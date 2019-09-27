@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <assert.h>
 #include <stdio.h>
 #include "vfs.h"
 #include "ext2.h"
@@ -123,6 +124,7 @@ static int shell_cat(const char *arg) {
     struct ofile fd;
     int res;
     char buf[512];
+    size_t bread = 0;
 
     if ((res = vfs_open(&fd, arg, 0, O_RDONLY)) != 0) {
         return res;
@@ -130,9 +132,12 @@ static int shell_cat(const char *arg) {
 
     while ((res = vfs_read(&fd, buf, sizeof(buf))) > 0) {
         fwrite(buf, 1, res, stdout);
+        bread += res;
     }
 
     vfs_close(&fd);
+
+    printf("\n%zuB total\n", bread);
     return 0;
 }
 
@@ -146,10 +151,13 @@ static int shell_cd(const char *arg) {
 
 static int shell_touch(const char *arg) {
     int res;
+    struct ofile fd;
 
-    if ((res = vfs_creat(NULL, arg, 0644, 0)) != 0) {
+    if ((res = vfs_creat(&fd, arg, 0644, O_RDWR)) != 0) {
         return res;
     }
+
+    vfs_close(&fd);
 
     return 0;
 }
@@ -248,7 +256,7 @@ int main(int argc, const char **argv) {
         return -1;
     }
 
-    if (access(argv[1], O_RDONLY) != 0) {
+    if (access(argv[1], O_RDONLY) < 0) {
         perror(argv[1]);
         return -1;
     }

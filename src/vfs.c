@@ -468,16 +468,13 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
 }
 
 int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
+    // TODO: proper support for O_TRUNC
     vnode_t *parent_vnode = NULL;
     vnode_t *vnode = NULL;
     int res;
 
     if ((res = vfs_find(cwd_vnode, path, &vnode)) == 0) {
-        // Node already exists with such name:
-        // Needed when find returns node with refcount of zero
-        vnode_ref(vnode);
-        vnode_unref(vnode);
-        return -EEXIST;
+        return vfs_open_node(of, vnode, opt & ~O_CREAT);
     }
 
     if (*path == '/') {
@@ -514,12 +511,8 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
     if (!of) {
         vnode_ref(vnode);
         vnode_unref(vnode);
-        if (opt & O_RDWR) {
-            // Need opening the file, but no descriptor provided
-            return -EINVAL;
-        }
-
-        return 0;
+        // Need opening the file, but no descriptor provided
+        return -EINVAL;
     }
 
     return vfs_open_node(of, vnode, opt & ~O_CREAT);
@@ -549,7 +542,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     int res;
 
     if (opt & O_DIRECTORY) {
-        assert((opt & O_RDWR) == O_RDONLY);
+        assert((opt & O_ACCMODE) == O_RDONLY);
         assert(!(opt & O_CREAT));
         vnode_ref(vn);
 
@@ -583,7 +576,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     }
     // Can't be both (RD|WR) and EX
     if (opt & O_EXEC) {
-        if (opt & O_RDWR) {
+        if (opt & O_ACCMODE) {
             return -EINVAL;
         }
     }
@@ -669,7 +662,7 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     if (fd->flags & O_DIRECTORY) {
         return -EISDIR;
     }
-    if (!(fd->flags & O_RDONLY)) {
+    if ((fd->flags & O_ACCMODE) == O_WRONLY) {
         return -EINVAL;
     }
     if (vn->op->read == NULL) {
@@ -693,7 +686,7 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     if (fd->flags & O_DIRECTORY) {
         return -EISDIR;
     }
-    if (!(fd->flags & O_WRONLY)) {
+    if ((fd->flags & O_ACCMODE) == O_RDONLY) {
         return -EINVAL;
     }
     if (vn->op->write == NULL) {

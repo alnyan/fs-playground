@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 
+#if !defined(__linux__)
+
 typedef uint32_t mode_t;
 typedef uint32_t uid_t;
 typedef uint32_t gid_t;
@@ -56,3 +58,7 @@ struct stat {
     uint32_t st_mtime;
     uint32_t st_ctime;
 };
+
+#else
+#include <sys/stat.h>
+#endif
