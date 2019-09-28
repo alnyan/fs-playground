@@ -62,6 +62,11 @@ void vnode_ref(vnode_t *vn) {
 //    char buf[1024];
 //    vfs_vnode_path(buf, vn);
 //    printf("++refcount for %s\n", buf);
+    struct vfs_node *node = (struct vfs_node *) vn->tree_node;
+    if (node && !node->parent) {
+        // Don't change refcounter for root nodes
+        return;
+    }
 
     ++vn->refcount;
 }
@@ -74,17 +79,22 @@ void vnode_unref(vnode_t *vn) {
     if (!node->parent) {
         return;
     }
-    if (vn->refcount == 0 && ((struct vfs_node *) vn->tree_node)->child == NULL) {
-        vnode_free(vn);
-        return;
-    }
-//    printf("--refcount for %s\n", buf);
-    assert(vn->refcount > 0);
-    --vn->refcount;
 
-    if (vn->refcount == 0) {
-        printf("free %s\n", buf);
-        // Free vnode
-        vnode_free(vn);
+    if (vn->refcount > 0) {
+        --vn->refcount;
+
+        if (vn->refcount == 0) {
+            if (node->child) {
+                return;
+            }
+
+            printf("free %s\n", buf);
+            // Free vnode
+            vnode_free(vn);
+        }
+    } else {
+        assert(node->child);
+
+        printf("--refcount with 0 but child\n");
     }
 }

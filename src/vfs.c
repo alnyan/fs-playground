@@ -1078,7 +1078,19 @@ int vfs_mkdir(const char *path, mode_t mode) {
         return -EINVAL;
     }
 
-    res = parent_vnode->op->mkdir(parent_vnode, path, mode);
+    if ((res = parent_vnode->op->mkdir(parent_vnode, path, mode)) < 0) {
+        vnode_unref(parent_vnode);
+        return res;
+    }
+
+    //struct vfs_node *parent_node = parent_vnode->tree_node;
+    //struct vfs_node *child_node = vfs_node_create(path, );
+
+    // Prepend it to parent's child list
+    //child_node->parent = parent_node;
+    //child_node->cdr = parent_node->child;
+    //parent_node->child = child_node;
+
     vnode_unref(parent_vnode);
     return res;
 }
