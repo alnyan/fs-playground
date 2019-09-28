@@ -872,6 +872,10 @@ int vfs_truncate(struct ofile *of, size_t length) {
     return vn->op->truncate(of, length);
 }
 
+// XXX: Linux seems to differentiate between
+//      unlink() and rmdir(). I think just
+//      passing a flag whether sys_rmdir or
+//      sys_unlink was called.
 int vfs_unlink(const char *path) {
     // XXX: validate this with removing mounted roots
     assert(path);
@@ -894,6 +898,20 @@ int vfs_unlink(const char *path) {
         // Trying to unlink root node?
         vnode_unref(vnode);
         return -EACCES;
+    }
+
+    if (vnode->refcount != 0) {
+        // Trying to unlink the file someone is using.
+        // Good solution would be to (TODO) defer the
+        // actual unlinking and perform it once no one
+        // is using it or notify writers/reader that the
+        // file is slated for removal. I think just adding
+        // a flag to vnode like "deleted" should suffice.
+        // For now, just check if vfs_ctx is trying to shoot
+        // its' leg off by unlinking the CWD
+        if (vnode == vfs_ctx.cwd_vnode) {
+            return -EINVAL;
+        }
     }
 
     parent_vnode = node->parent->vnode;
