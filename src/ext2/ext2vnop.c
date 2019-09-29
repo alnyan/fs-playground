@@ -2,6 +2,7 @@
 #include "ext2.h"
 #include "node.h"
 #include "ofile.h"
+#include "vfs.h"
 
 #include <string.h>
 #include <stddef.h>
@@ -12,7 +13,7 @@
 
 // Forward declaration of ext2 vnode functions
 static int ext2_vnode_find(vnode_t *vn, const char *name, vnode_t **resvn);
-static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt, vnode_t **resvn);
+static int ext2_vnode_creat(vnode_t *at, struct vfs_ioctx *ctx, const char *name, mode_t mode, int opt, vnode_t **resvn);
 static int ext2_vnode_mkdir(vnode_t *at, const char *name, mode_t mode);
 static int ext2_vnode_open(vnode_t *vn, int opt);
 static int ext2_vnode_opendir(vnode_t *vn, int opt);
@@ -204,7 +205,7 @@ static int ext2_vnode_mkdir(vnode_t *at, const char *name, mode_t mode) {
     return 0;
 }
 
-static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt, vnode_t **resvn) {
+static int ext2_vnode_creat(vnode_t *at, struct vfs_ioctx *ctx, const char *name, mode_t mode, int opt, vnode_t **resvn) {
     fs_t *ext2 = at->fs;
     assert(at->type == VN_DIR);
     assert(/* Don't support making directories like this */ !(mode & O_DIRECTORY));
@@ -249,11 +250,10 @@ static int ext2_vnode_creat(vnode_t *at, const char *name, mode_t mode, int opt,
     ent_inode->l2_indirect_block = 0;
     ent_inode->l3_indirect_block = 0;
 
+    ent_inode->uid = ctx->uid;
+    ent_inode->gid = ctx->gid;
     // TODO: only regular files can be created this way now
     ent_inode->type_perm = (mode & 0x1FF) | (EXT2_TYPE_REG);
-    // TODO: obtain these from process context in kernel
-    ent_inode->uid = 0;
-    ent_inode->gid = 0;
     ent_inode->disk_sector_count = 0;
     ent_inode->size_lower = 0;
 

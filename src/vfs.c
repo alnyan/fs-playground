@@ -545,10 +545,7 @@ static int vfs_creat_internal(struct vfs_ioctx *ctx, vnode_t *at, const char *na
         return -EROFS;
     }
 
-    // TODO: add uid/gid to vnode and creat() of the
-    // filesystem shall write these to resulting inode
-
-    if ((res = at->op->creat(at, name, mode, opt, resvn)) != 0) {
+    if ((res = at->op->creat(at, ctx, name, mode, opt, resvn)) != 0) {
         return res;
     }
 

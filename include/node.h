@@ -19,6 +19,7 @@
 #define O_EXEC      (1 << 2)
 
 struct ofile;
+struct vfs_ioctx;
 typedef struct vnode vnode_t;
 typedef struct fs fs_t;
 
@@ -39,7 +40,7 @@ struct vnode_operations {
 
     // File entry operations
     int (*access) (vnode_t *node, uid_t *uid, gid_t *gid, mode_t *mode);
-    int (*creat) (vnode_t *node, const char *name, mode_t mode, int opt, vnode_t **res);
+    int (*creat) (vnode_t *node, struct vfs_ioctx *ctx, const char *name, mode_t mode, int opt, vnode_t **res);
     int (*mkdir) (vnode_t *at, const char *name, mode_t mode);
     int (*unlink) (vnode_t *at, vnode_t *vn, const char *name);
     int (*stat) (vnode_t *node, struct stat *st);
