@@ -10,13 +10,12 @@
 #include <stdio.h>
 
 static struct vfs_node root_node;
-struct vfs_user_context vfs_ctx;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
-static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid);
-static int vfs_vnode_access(vnode_t *vn, int mode);
+static int vfs_access_internal(struct vfs_ioctx *ctx, int desm, mode_t mode, uid_t uid, gid_t gid);
+static int vfs_vnode_access(struct vfs_ioctx *ctx, vnode_t *vn, int mode);
 
-static int vfs_setcwd_rel(vnode_t *at, const char *path) {
+static int vfs_setcwd_rel(struct vfs_ioctx *ctx, vnode_t *at, const char *path) {
     // cwd is absolute path
     vnode_t *new_cwd;
     int res;
@@ -30,25 +29,25 @@ static int vfs_setcwd_rel(vnode_t *at, const char *path) {
         return -ENOTDIR;
     }
 
-    if ((res = vfs_vnode_access(new_cwd, X_OK)) < 0) {
+    if ((res = vfs_vnode_access(ctx, new_cwd, X_OK)) < 0) {
         vnode_unref(new_cwd);
         return res;
     }
 
-    if (vfs_ctx.cwd_vnode) {
-        vnode_unref(vfs_ctx.cwd_vnode);
+    if (ctx->cwd_vnode) {
+        vnode_unref(ctx->cwd_vnode);
     }
-    vfs_ctx.cwd_vnode = new_cwd;
+    ctx->cwd_vnode = new_cwd;
 
     return 0;
 }
 
-int vfs_setcwd(const char *cwd) {
-    return vfs_setcwd_rel(NULL, cwd);
+int vfs_setcwd(struct vfs_ioctx *ctx, const char *cwd) {
+    return vfs_setcwd_rel(ctx, NULL, cwd);
 }
 
-int vfs_chdir(const char *cwd_rel) {
-    return vfs_setcwd_rel(vfs_ctx.cwd_vnode, cwd_rel);
+int vfs_chdir(struct vfs_ioctx *ctx, const char *cwd_rel) {
+    return vfs_setcwd_rel(ctx, ctx->cwd_vnode, cwd_rel);
 }
 
 static int vfs_open_access_mask(int oflags) {
@@ -68,8 +67,8 @@ static int vfs_open_access_mask(int oflags) {
     }
 }
 
-static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
-    if (vfs_ctx.uid == 0) {
+static int vfs_access_internal(struct vfs_ioctx *ctx, int desm, mode_t mode, uid_t uid, gid_t gid) {
+    if (ctx->uid == 0) {
         if (desm & X_OK) {
             // Check if anyone at all can execute this
             if (!(mode & (S_IXOTH | S_IXGRP | S_IXUSR))) {
@@ -80,7 +79,7 @@ static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
         return 0;
     }
 
-    if (uid == vfs_ctx.uid) {
+    if (uid == ctx->uid) {
         if ((desm & R_OK) && !(mode & S_IRUSR)) {
             return -EACCES;
         }
@@ -90,7 +89,7 @@ static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
         if ((desm & X_OK) && !(mode & S_IXUSR)) {
             return -EACCES;
         }
-    } else if (gid == vfs_ctx.gid) {
+    } else if (gid == ctx->gid) {
         if ((desm & R_OK) && !(mode & S_IRGRP)) {
             return -EACCES;
         }
@@ -115,7 +114,7 @@ static int vfs_access_internal(int desm, mode_t mode, uid_t uid, gid_t gid) {
     return 0;
 }
 
-static int vfs_vnode_access(vnode_t *vn, int mode) {
+static int vfs_vnode_access(struct vfs_ioctx *ctx, vnode_t *vn, int mode) {
     mode_t vn_mode;
     uid_t vn_uid;
     gid_t vn_gid;
@@ -130,13 +129,10 @@ static int vfs_vnode_access(vnode_t *vn, int mode) {
         return res;
     }
 
-    return vfs_access_internal(mode, vn_mode, vn_uid, vn_gid);
+    return vfs_access_internal(ctx, mode, vn_mode, vn_uid, vn_gid);
 }
 
 void vfs_init(void) {
-    // Setup testing usage context
-    vfs_ctx.cwd_vnode = NULL;
-
     // Setup root node
     strcpy(root_node.name, "[root]");
     root_node.vnode = NULL;
@@ -438,7 +434,11 @@ static int vfs_mount_internal(struct vfs_node *at, void *blkdev, const char *fs_
     return 0;
 }
 
-int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char *opt) {
+int vfs_mount(struct vfs_ioctx *ctx, const char *target, void *blkdev, const char *fs_name, const char *opt) {
+    if (ctx->uid != 0) {
+        return -EACCES;
+    }
+
     struct vfs_node *mount_at;
     vnode_t *vnode_mount_at;
     int res;
@@ -455,7 +455,7 @@ int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char 
     }
 
     // Lookup the tree node we're mounting at
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, target, &vnode_mount_at)) != 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, target, &vnode_mount_at)) != 0) {
         return res;
     }
 
@@ -466,7 +466,10 @@ int vfs_mount(const char *target, void *blkdev, const char *fs_name, const char 
     return vfs_mount_internal(mount_at, blkdev, fs_name, opt);
 }
 
-int vfs_umount(const char *target) {
+int vfs_umount(struct vfs_ioctx *ctx, const char *target) {
+    if (ctx->uid != 0) {
+        return -EACCES;
+    }
     if (!root_node.vnode) {
         // No root, don't even bother umounting anything
         return -ENOENT;
@@ -478,7 +481,7 @@ int vfs_umount(const char *target) {
     struct vfs_node *at;
     int res;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, target, &at_vnode)) != 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, target, &at_vnode)) != 0) {
         return res;
     }
 
@@ -498,9 +501,9 @@ int vfs_umount(const char *target) {
     at->vnode = at->real_vnode;
     at->ismount = 0;
 
-    if (at_vnode == vfs_ctx.cwd_vnode) {
+    if (at_vnode == ctx->cwd_vnode) {
         // Umounting the cwd
-        vfs_ctx.cwd_vnode = NULL;
+        ctx->cwd_vnode = NULL;
     }
     at_vnode->refcount = 0;
     vnode_free(at_vnode);
@@ -533,7 +536,7 @@ static const char *vfs_path_basename(const char *path) {
     return slash + 1;
 }
 
-static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, vnode_t **resvn) {
+static int vfs_creat_internal(struct vfs_ioctx *ctx, vnode_t *at, const char *name, int mode, int opt, vnode_t **resvn) {
     // Create a file without opening it
     assert(at && at->op && at->tree_node);
     int res;
@@ -560,13 +563,13 @@ static int vfs_creat_internal(vnode_t *at, const char *name, int mode, int opt, 
     return 0;
 }
 
-int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
+int vfs_creat(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mode, int opt) {
     vnode_t *parent_vnode = NULL;
     vnode_t *vnode = NULL;
     int res;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) == 0) {
-        return vfs_open_node(of, vnode, opt & ~O_CREAT);
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) == 0) {
+        return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
     }
 
     if (*path == '/') {
@@ -589,7 +592,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         }
 
         // Find parent
-        if ((res = vfs_find(vfs_ctx.cwd_vnode, parent_path, &parent_vnode)) != 0) {
+        if ((res = vfs_find(ctx->cwd_vnode, parent_path, &parent_vnode)) != 0) {
             printf("Parent does not exist: %s\n", parent_path);
             return res;
         }
@@ -600,7 +603,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         return -ENOTDIR;
     }
 
-    if (vfs_vnode_access(parent_vnode, W_OK) < 0) {
+    if (vfs_vnode_access(ctx, parent_vnode, W_OK) < 0) {
         return -EACCES;
     }
 
@@ -611,7 +614,7 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         return -EINVAL;
     }
 
-    if ((res = vfs_creat_internal(parent_vnode, path, mode, opt & ~O_CREAT, &vnode)) != 0) {
+    if ((res = vfs_creat_internal(ctx, parent_vnode, path, mode, opt & ~O_CREAT, &vnode)) != 0) {
         // Could not create entry
         return res;
     }
@@ -623,10 +626,10 @@ int vfs_creat(struct ofile *of, const char *path, int mode, int opt) {
         return -EINVAL;
     }
 
-    return vfs_open_node(of, vnode, opt & ~O_CREAT);
+    return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
 }
 
-int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
+int vfs_open(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mode, int opt) {
     assert(of);
     // Try to find the file
     int res;
@@ -634,23 +637,23 @@ int vfs_open(struct ofile *of, const char *path, int mode, int opt) {
 
     // TODO: normalize path
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) != 0) {
         if (!(opt & O_CREAT)) {
             return -ENOENT;
         }
 
-        return vfs_creat(of, path, mode, opt);
+        return vfs_creat(ctx, of, path, mode, opt);
     }
 
-    return vfs_open_node(of, vnode, opt & ~O_CREAT);
+    return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
 }
 
-int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
+int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt) {
     // TODO: O_APPEND
     assert(vn && vn->op && of);
     int res;
 
-    if (vfs_vnode_access(vn, vfs_open_access_mask(opt)) < 0) {
+    if (vfs_vnode_access(ctx, vn, vfs_open_access_mask(opt)) < 0) {
         return -EACCES;
     }
 
@@ -748,7 +751,7 @@ int vfs_open_node(struct ofile *of, vnode_t *vn, int opt) {
     return 0;
 }
 
-void vfs_close(struct ofile *of) {
+void vfs_close(struct vfs_ioctx *ctx, struct ofile *of) {
     assert(of);
     vnode_t *vn = of->vnode;
     assert(vn && vn->op);
@@ -760,7 +763,7 @@ void vfs_close(struct ofile *of) {
     vnode_unref(of->vnode);
 }
 
-int vfs_statat(vnode_t *at, const char *path, struct stat *st) {
+int vfs_statat(struct vfs_ioctx *ctx, vnode_t *at, const char *path, struct stat *st) {
     assert(at && path && st);
     int res;
     vnode_t *vnode;
@@ -781,12 +784,12 @@ int vfs_statat(vnode_t *at, const char *path, struct stat *st) {
     return res;
 }
 
-int vfs_stat(const char *path, struct stat *st) {
+int vfs_stat(struct vfs_ioctx *ctx, const char *path, struct stat *st) {
     assert(path && st);
     vnode_t *vnode;
     int res;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) != 0) {
         return res;
     }
 
@@ -802,12 +805,12 @@ int vfs_stat(const char *path, struct stat *st) {
     return res;
 }
 
-ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
+ssize_t vfs_read(struct vfs_ioctx *ctx, struct ofile *fd, void *buf, size_t count) {
     assert(fd);
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
     // XXX: should these be checked on every read?
-    if (vfs_vnode_access(vn, R_OK) < 0) {
+    if (vfs_vnode_access(ctx, vn, R_OK) < 0) {
         return -EACCES;
     }
 
@@ -830,13 +833,13 @@ ssize_t vfs_read(struct ofile *fd, void *buf, size_t count) {
     return nr;
 }
 
-ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
+ssize_t vfs_write(struct vfs_ioctx *ctx, struct ofile *fd, const void *buf, size_t count) {
     assert(fd);
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
     // XXX: should these be checked on every write?
-    if (vfs_vnode_access(vn, W_OK) < 0) {
+    if (vfs_vnode_access(ctx, vn, W_OK) < 0) {
         return -EACCES;
     }
 
@@ -853,7 +856,7 @@ ssize_t vfs_write(struct ofile *fd, const void *buf, size_t count) {
     return vn->op->write(fd, buf, count);
 }
 
-int vfs_truncate(struct ofile *of, size_t length) {
+int vfs_truncate(struct vfs_ioctx *ctx, struct ofile *of, size_t length) {
     assert(of);
     if ((of->flags & O_ACCMODE) == O_RDONLY) {
         return -EINVAL;
@@ -861,7 +864,7 @@ int vfs_truncate(struct ofile *of, size_t length) {
     vnode_t *vn = of->vnode;
     assert(vn && vn->op);
     // XXX: should these be checked on every write?
-    if (vfs_vnode_access(vn, W_OK) < 0) {
+    if (vfs_vnode_access(ctx, vn, W_OK) < 0) {
         return -EACCES;
     }
 
@@ -876,14 +879,14 @@ int vfs_truncate(struct ofile *of, size_t length) {
 //      unlink() and rmdir(). I think just
 //      passing a flag whether sys_rmdir or
 //      sys_unlink was called.
-int vfs_unlink(const char *path) {
+int vfs_unlink(struct vfs_ioctx *ctx, const char *path) {
     // XXX: validate this with removing mounted roots
     assert(path);
     // Find the vnode to unlink
     int res;
     vnode_t *parent_vnode, *vnode;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) < 0) {
         return res;
     }
 
@@ -909,13 +912,19 @@ int vfs_unlink(const char *path) {
         // a flag to vnode like "deleted" should suffice.
         // For now, just check if vfs_ctx is trying to shoot
         // its' leg off by unlinking the CWD
-        if (vnode == vfs_ctx.cwd_vnode) {
+        if (vnode == ctx->cwd_vnode) {
             return -EINVAL;
         }
     }
 
     parent_vnode = node->parent->vnode;
     vnode_ref(parent_vnode);
+
+    if ((res = vfs_vnode_access(ctx, parent_vnode, W_OK)) < 0) {
+        vnode_unref(vnode);
+        vnode_unref(parent_vnode);
+        return res;
+    }
 
     if (parent_vnode->op->unlink) {
         // TODO: handle
@@ -941,12 +950,12 @@ int vfs_unlink(const char *path) {
     }
 }
 
-int vfs_chmod(const char *path, mode_t mode) {
+int vfs_chmod(struct vfs_ioctx *ctx, const char *path, mode_t mode) {
     assert(path);
     vnode_t *vnode;
     int res;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) < 0) {
         return res;
     }
 
@@ -964,7 +973,7 @@ int vfs_chmod(const char *path, mode_t mode) {
 
         // To chmod, the uid of the user has to match
         // the node's one
-        if ((vn_uid != vfs_ctx.uid) && (vfs_ctx.uid != 0)) {
+        if ((vn_uid != ctx->uid) && (ctx->uid != 0)) {
             return -EACCES;
         }
     }
@@ -979,17 +988,17 @@ int vfs_chmod(const char *path, mode_t mode) {
     return res;
 }
 
-int vfs_chown(const char *path, uid_t uid, gid_t gid) {
+int vfs_chown(struct vfs_ioctx *ctx, const char *path, uid_t uid, gid_t gid) {
     assert(path);
     vnode_t *vnode;
     int res;
 
-    if (vfs_ctx.uid != 0) {
+    if (ctx->uid != 0) {
         // For now, only root can change ownership of the nodes
         return -EACCES;
     }
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) < 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) < 0) {
         return res;
     }
 
@@ -1007,7 +1016,7 @@ int vfs_chown(const char *path, uid_t uid, gid_t gid) {
 }
 
 // TODO: change signature so it can return errno
-struct dirent *vfs_readdir(struct ofile *fd) {
+struct dirent *vfs_readdir(struct vfs_ioctx *ctx, struct ofile *fd) {
     assert(fd);
     if (!(fd->flags & O_DIRECTORY)) {
         return NULL;
@@ -1015,7 +1024,7 @@ struct dirent *vfs_readdir(struct ofile *fd) {
     vnode_t *vn = fd->vnode;
     assert(vn && vn->op);
 
-    if (vfs_vnode_access(vn, R_OK) < 0) {
+    if (vfs_vnode_access(ctx, vn, R_OK) < 0) {
         return NULL;
     }
 
@@ -1030,13 +1039,13 @@ struct dirent *vfs_readdir(struct ofile *fd) {
     return NULL;
 }
 
-int vfs_mkdir(const char *path, mode_t mode) {
+int vfs_mkdir(struct vfs_ioctx *ctx, const char *path, mode_t mode) {
     vnode_t *parent_vnode = NULL;
     vnode_t *vnode = NULL;
     int res;
 
     // Check if a directory with such name already exists
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) == 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) == 0) {
         vnode_ref(vnode);
         vnode_unref(vnode);
         return -EEXIST;
@@ -1063,7 +1072,7 @@ int vfs_mkdir(const char *path, mode_t mode) {
         }
 
         // Find parent
-        if ((res = vfs_find(vfs_ctx.cwd_vnode, parent_path, &parent_vnode)) != 0) {
+        if ((res = vfs_find(ctx->cwd_vnode, parent_path, &parent_vnode)) != 0) {
             printf("Parent does not exist: %s\n", parent_path);
             return res;
         }
@@ -1078,7 +1087,7 @@ int vfs_mkdir(const char *path, mode_t mode) {
     }
 
     // Need write permission
-    if ((res = vfs_vnode_access(parent_vnode, W_OK)) < 0) {
+    if ((res = vfs_vnode_access(ctx, parent_vnode, W_OK)) < 0) {
         vnode_unref(parent_vnode);
         return res;
     }
@@ -1101,19 +1110,11 @@ int vfs_mkdir(const char *path, mode_t mode) {
         return res;
     }
 
-    //struct vfs_node *parent_node = parent_vnode->tree_node;
-    //struct vfs_node *child_node = vfs_node_create(path, );
-
-    // Prepend it to parent's child list
-    //child_node->parent = parent_node;
-    //child_node->cdr = parent_node->child;
-    //parent_node->child = child_node;
-
     vnode_unref(parent_vnode);
     return res;
 }
 
-int vfs_access(const char *path, int mode) {
+int vfs_access(struct vfs_ioctx *ctx, const char *path, int mode) {
     assert(path);
     vnode_t *vnode;
     int res;
@@ -1122,7 +1123,7 @@ int vfs_access(const char *path, int mode) {
     uid_t vn_uid;
     gid_t vn_gid;
 
-    if ((res = vfs_find(vfs_ctx.cwd_vnode, path, &vnode)) != 0) {
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) != 0) {
         return res;
     }
 
@@ -1147,5 +1148,5 @@ int vfs_access(const char *path, int mode) {
 
     vnode_unref(vnode);
 
-    return vfs_access_internal(mode, vn_mode, vn_uid, vn_gid);
+    return vfs_access_internal(ctx, mode, vn_mode, vn_uid, vn_gid);
 }

@@ -9,6 +9,8 @@
 #include <ctype.h>
 #include <errno.h>
 
+static struct vfs_ioctx ioctx;
+
 static const char *errno_str(int r) {
     switch (r) {
         case -EIO:
@@ -61,7 +63,7 @@ static void dumpstat(char *buf, const struct stat *st) {
 
 static int shell_stat(const char *path) {
     struct stat st;
-    int res = vfs_stat(path, &st);
+    int res = vfs_stat(&ioctx, path, &st);
 
     if (res == 0) {
         char buf[64];
@@ -79,17 +81,17 @@ static int shell_tree(const char *arg) {
 
 static int shell_ls(const char *arg) {
     struct ofile fd;
-    int res = vfs_open(&fd, arg, 0, O_DIRECTORY | O_RDONLY);
+    int res = vfs_open(&ioctx, &fd, arg, 0, O_DIRECTORY | O_RDONLY);
     if (res < 0) {
         return res;
     }
 
     struct dirent *ent;
-    while ((ent = vfs_readdir(&fd))) {
+    while ((ent = vfs_readdir(&ioctx, &fd))) {
         printf("dirent %s\n", ent->d_name);
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
 
     return res;
 }
@@ -101,16 +103,16 @@ static int shell_ls_detail(const char *arg) {
     char fullp[512];
     int res;
 
-    if ((res = vfs_open(&fd, arg, 0, O_DIRECTORY | O_RDONLY)) < 0) {
+    if ((res = vfs_open(&ioctx, &fd, arg, 0, O_DIRECTORY | O_RDONLY)) < 0) {
         return res;
     }
 
-    while ((ent = vfs_readdir(&fd))) {
+    while ((ent = vfs_readdir(&ioctx, &fd))) {
         if (ent->d_name[0] == '.') {
             continue;
         }
 
-        if ((res = vfs_statat(fd.vnode, ent->d_name, &st)) < 0) {
+        if ((res = vfs_statat(&ioctx, fd.vnode, ent->d_name, &st)) < 0) {
             return res;
         }
 
@@ -118,7 +120,7 @@ static int shell_ls_detail(const char *arg) {
         printf("%s\t%s\n", fullp, ent->d_name);
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
     return 0;
 }
 
@@ -128,38 +130,38 @@ static int shell_cat(const char *arg) {
     char buf[512];
     size_t bread = 0;
 
-    if ((res = vfs_open(&fd, arg, 0, O_RDONLY)) != 0) {
+    if ((res = vfs_open(&ioctx, &fd, arg, 0, O_RDONLY)) != 0) {
         return res;
     }
 
-    while ((res = vfs_read(&fd, buf, sizeof(buf))) > 0) {
+    while ((res = vfs_read(&ioctx, &fd, buf, sizeof(buf))) > 0) {
         fwrite(buf, 1, res, stdout);
         bread += res;
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
 
     printf("\n%zuB total\n", bread);
     return 0;
 }
 
 static int shell_setcwd(const char *arg) {
-    return vfs_setcwd(arg);
+    return vfs_setcwd(&ioctx, arg);
 }
 
 static int shell_cd(const char *arg) {
-    return vfs_chdir(arg);
+    return vfs_chdir(&ioctx, arg);
 }
 
 static int shell_touch(const char *arg) {
     int res;
     struct ofile fd;
 
-    if ((res = vfs_creat(&fd, arg, 0644, O_RDWR)) != 0) {
+    if ((res = vfs_creat(&ioctx, &fd, arg, 0644, O_RDWR)) != 0) {
         return res;
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
 
     return 0;
 }
@@ -174,15 +176,15 @@ static int shell_hello(const char *arg) {
         return -1;
     }
 
-    if ((res = vfs_open(&fd, arg, 0644, O_TRUNC | O_CREAT | O_WRONLY)) < 0) {
+    if ((res = vfs_open(&ioctx, &fd, arg, 0644, O_TRUNC | O_CREAT | O_WRONLY)) < 0) {
         return res;
     }
 
-    if ((res = vfs_write(&fd, linebuf, strlen(linebuf))) < 0) {
+    if ((res = vfs_write(&ioctx, &fd, linebuf, strlen(linebuf))) < 0) {
         return res;
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
 
     return 0;
 }
@@ -192,25 +194,25 @@ static int shell_trunc(const char *arg) {
     int res;
 
     // TODO: implement O_TRUNC
-    if ((res = vfs_open(&fd, arg, 0644, O_WRONLY)) < 0) {
+    if ((res = vfs_open(&ioctx, &fd, arg, 0644, O_WRONLY)) < 0) {
         return res;
     }
 
-    if ((res = vfs_truncate(&fd, 0)) < 0) {
+    if ((res = vfs_truncate(&ioctx, &fd, 0)) < 0) {
         return res;
     }
 
-    vfs_close(&fd);
+    vfs_close(&ioctx, &fd);
 
     return 0;
 }
 
 static int shell_unlink(const char *arg) {
-    return vfs_unlink(arg);
+    return vfs_unlink(&ioctx, arg);
 }
 
 static int shell_mkdir(const char *arg) {
-    return vfs_mkdir(arg, 0755);
+    return vfs_mkdir(&ioctx, arg, 0755);
 }
 
 static int shell_chmod(const char *arg) {
@@ -222,7 +224,7 @@ static int shell_chmod(const char *arg) {
         return -1;
     }
     sscanf(buf, "%o", &mode);
-    return vfs_chmod(arg, mode);
+    return vfs_chmod(&ioctx, arg, mode);
 }
 
 static int shell_chown(const char *arg) {
@@ -241,7 +243,7 @@ static int shell_chown(const char *arg) {
     }
     sscanf(buf, "%d", &gid);
 
-    return vfs_chown(arg, uid, gid);
+    return vfs_chown(&ioctx, arg, uid, gid);
 }
 
 static int shell_access(const char *arg) {
@@ -273,14 +275,14 @@ static int shell_access(const char *arg) {
         }
     }
 
-    return vfs_access(arg, mode);
+    return vfs_access(&ioctx, arg, mode);
 }
 
 static int shell_setuid(const char *arg) {
     uid_t uid;
     sscanf(arg, "%d", &uid);
 
-    vfs_ctx.uid = uid;
+    ioctx.uid = uid;
 
     return 0;
 }
@@ -289,13 +291,13 @@ static int shell_setgid(const char *arg) {
     gid_t gid;
     sscanf(arg, "%d", &gid);
 
-    vfs_ctx.gid = gid;
+    ioctx.gid = gid;
 
     return 0;
 }
 
 static int shell_me(const char *arg) {
-    printf("me: uid = %d, gid = %d\n", vfs_ctx.uid, vfs_ctx.gid);
+    printf("me: uid = %d, gid = %d\n", ioctx.uid, ioctx.gid);
     return 0;
 }
 
@@ -385,17 +387,17 @@ int main(int argc, const char **argv) {
     }
 
     int res;
-    struct ofile fd0;
-    struct stat st0;
-    vnode_t *file1;
-    char buf[513];
+
+    ioctx.uid = 0;
+    ioctx.gid = 0;
+    ioctx.cwd_vnode = NULL;
 
     vfs_init();
     ext2_class_init();
     testblk_init(argv[1]);
 
     // Mount ext2 as rootfs
-    if ((res = vfs_mount("/", &testblk_dev, "ext2", NULL)) != 0) {
+    if ((res = vfs_mount(&ioctx, "/", &testblk_dev, "ext2", NULL)) != 0) {
         fprintf(stderr, "Failed to mount rootfs\n");
         return -1;
     }
@@ -403,7 +405,7 @@ int main(int argc, const char **argv) {
     shell();
 
     // Cleanup
-    if ((res = vfs_umount("/")) != 0) {
+    if ((res = vfs_umount(&ioctx, "/")) != 0) {
         fprintf(stderr, "Failed to umount /\n");
         return -1;
     }
