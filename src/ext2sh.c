@@ -36,6 +36,34 @@ static const char *errno_str(int r) {
     }
 }
 
+static void prettysz(char *out, size_t sz) {
+    static const char sizs[] = "KMGTPE???";
+    size_t f = sz, r = 0;
+    int pwr = 0;
+    size_t l = 0;
+
+    while (f >= 1536) {
+        r = ((f % 1024) * 10) / 1024;
+        f /= 1024;
+        ++pwr;
+    }
+
+    sprintf(out, "%zu", f);
+    l = strlen(out);
+
+    if (pwr) {
+        out[l++] = '.';
+        out[l++] = '0' + r;
+
+        out[l++] = sizs[pwr - 1];
+
+        out[l++] = 'i';
+    }
+
+    out[l++] = 'B';
+    out[l++] = 0;
+}
+
 static void dumpstat(char *buf, const struct stat *st) {
     char t = '-';
 
@@ -301,6 +329,43 @@ static int shell_me(const char *arg) {
     return 0;
 }
 
+static int shell_df(const char *arg) {
+    struct statvfs st;
+    int res;
+
+    if ((res = vfs_statvfs(&ioctx, arg, &st)) < 0) {
+        return res;
+    }
+
+    char buf[24];
+
+    printf("%12s %12s %12s %5s\n",
+            "Blocks",
+            "Used",
+            "Free",
+            "Use%");
+    printf("% 12zd % 12zd % 12zd % 4zd%%\n\n",
+           st.f_blocks,
+           st.f_blocks - st.f_bfree,
+           st.f_bfree,
+           ((st.f_blocks - st.f_bfree) * 100) / st.f_blocks);
+    printf("%12s %12s %12s %5s\n",
+            "Total",
+            "Used",
+            "Free",
+            "Use%");
+
+    prettysz(buf, st.f_blocks * st.f_bsize);
+    printf("%12s ", buf);
+    prettysz(buf, (st.f_blocks - st.f_bfree) * st.f_bsize);
+    printf("%12s ", buf);
+    prettysz(buf, st.f_bfree * st.f_bsize);
+    printf("%12s % 4zd%%\n", buf,
+           ((st.f_blocks - st.f_bfree) * 100) / st.f_blocks);
+
+    return 0;
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -321,6 +386,7 @@ static struct {
     { "access", shell_access },
     { "setuid", shell_setuid },
     { "setgid", shell_setgid },
+    { "df", shell_df },
     { "me", shell_me },
     { "cd", shell_cd },
 };
@@ -401,6 +467,9 @@ int main(int argc, const char **argv) {
         fprintf(stderr, "Failed to mount rootfs\n");
         return -1;
     }
+
+    ioctx.uid = 1000;
+    ioctx.gid = 1000;
 
     shell();
 

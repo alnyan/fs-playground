@@ -1,4 +1,5 @@
 #include "ext2.h"
+#include "vfs.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -114,12 +115,35 @@ static vnode_t *ext2_fs_get_root(fs_t *fs) {
     return res;
 }
 
+static int ext2_fs_statvfs(fs_t *fs, struct statvfs *st) {
+    struct ext2_extsb *sb = fs->fs_private;
+
+    st->f_blocks = sb->sb.block_count;
+    st->f_bfree = sb->sb.free_block_count;
+    st->f_bavail = sb->sb.block_count - sb->sb.su_reserved;
+
+    st->f_files = sb->sb.inode_count;
+    st->f_ffree = sb->sb.free_inode_count;
+    st->f_favail = sb->sb.inode_count - sb->first_non_reserved + 1;
+
+    st->f_bsize = sb->block_size;
+    st->f_frsize = sb->block_size;
+
+    // XXX: put something here
+    st->f_fsid = 0;
+    st->f_flag = 0;
+    st->f_namemax = 256;
+
+    return 0;
+}
+
 
 static struct fs_class ext2_class = {
-    "ext2",
-    ext2_fs_get_root,
-    ext2_fs_mount,
-    ext2_fs_umount,
+    .name = "ext2",
+    .get_root = ext2_fs_get_root,
+    .mount = ext2_fs_mount,
+    .umount = ext2_fs_umount,
+    .statvfs = ext2_fs_statvfs
 };
 
 void ext2_class_init(void) {

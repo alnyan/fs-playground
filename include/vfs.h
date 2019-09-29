@@ -20,6 +20,20 @@ struct vfs_node {
     struct vfs_node *cdr;
 };
 
+struct statvfs {
+    uint64_t f_bsize;
+    uint64_t f_frsize;
+    fsblkcnt_t f_blocks;
+    fsblkcnt_t f_bfree;
+    fsblkcnt_t f_bavail;
+    fsblkcnt_t f_files;
+    fsblkcnt_t f_ffree;
+    fsblkcnt_t f_favail;
+    uint64_t f_fsid;
+    uint64_t f_flag;
+    uint64_t f_namemax;
+};
+
 // TODO: in real use case this will be extracted from
 //       process data struct
 struct vfs_ioctx {
@@ -61,3 +75,5 @@ int vfs_access(struct vfs_ioctx *ctx, const char *path, int mode);
 // Directroy ops
 int vfs_mkdir(struct vfs_ioctx *ctx, const char *path, mode_t mode);
 struct dirent *vfs_readdir(struct vfs_ioctx *ctx, struct ofile *fd);
+
+int vfs_statvfs(struct vfs_ioctx *ctx, const char *path, struct statvfs *st);

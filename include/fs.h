@@ -2,12 +2,15 @@
 #include "node.h"
 #include "blk.h"
 
+struct statvfs;
+
 struct fs_class {
     char name[256];
 
     vnode_t *(*get_root) (fs_t *fs);
     int (*mount) (fs_t *fs, const char *opt);
     int (*umount) (fs_t *fs);
+    int (*statvfs) (fs_t *fs, struct statvfs *st);
 
     struct vnode_operations op;
 };

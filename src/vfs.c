@@ -1149,3 +1149,29 @@ int vfs_access(struct vfs_ioctx *ctx, const char *path, int mode) {
 
     return vfs_access_internal(ctx, mode, vn_mode, vn_uid, vn_gid);
 }
+
+int vfs_statvfs(struct vfs_ioctx *ctx, const char *path, struct statvfs *st) {
+    assert(ctx && path && st);
+    vnode_t *vnode;
+    int res;
+    fs_t *fs;
+
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) < 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+
+    if (!(fs = vnode->fs)) {
+        vnode_unref(vnode);
+        return -EINVAL;
+    }
+
+    vnode_unref(vnode);
+
+    if (!fs->cls || !fs->cls->statvfs) {
+        return -EINVAL;
+    }
+
+    return fs->cls->statvfs(fs, st);
+}
