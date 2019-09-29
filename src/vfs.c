@@ -571,7 +571,11 @@ int vfs_creat(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mod
     int res;
 
     if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) == 0) {
-        return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
+        vnode_ref(vnode);
+        if ((res = vfs_open_node(ctx, of, vnode, opt & ~O_CREAT)) < 0) {
+            vnode_unref(vnode);
+        }
+        return res;
     }
 
     if (*path == '/') {
@@ -621,14 +625,19 @@ int vfs_creat(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mod
         return res;
     }
 
+    vnode_ref(vnode);
+
     if (!of) {
-        vnode_ref(vnode);
         vnode_unref(vnode);
         // Need opening the file, but no descriptor provided
         return -EINVAL;
     }
 
-    return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
+    if ((res = vfs_open_node(ctx, of, vnode, opt & ~O_CREAT)) < 0) {
+        vnode_unref(vnode);
+    }
+
+    return res;
 }
 
 int vfs_open(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mode, int opt) {
@@ -647,7 +656,14 @@ int vfs_open(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mode
         return vfs_creat(ctx, of, path, mode, opt);
     }
 
-    return vfs_open_node(ctx, of, vnode, opt & ~O_CREAT);
+    vnode_ref(vnode);
+    if ((res = vfs_open_node(ctx, of, vnode, opt & ~O_CREAT)) < 0) {
+        vnode_unref(vnode);
+        return res;
+    }
+
+    // Leave refcount + 1'd, ioctx is using the node
+    return 0;
 }
 
 int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt) {
@@ -664,21 +680,17 @@ int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt)
         // How does one truncate a directory?
         assert(!(opt & O_TRUNC));
         assert(!(opt & O_CREAT));
-        vnode_ref(vn);
 
         if (vn->type != VN_DIR) {
-            vnode_unref(vn);
             return -ENOTDIR;
         }
 
         // opendir
         if (vn->op->opendir) {
             if ((res = vn->op->opendir(vn, opt)) != 0) {
-                vnode_unref(vn);
                 return res;
             }
         } else {
-            vnode_unref(vn);
             return -EINVAL;
         }
 
@@ -692,23 +704,17 @@ int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt)
     // Check flag sanity
     // Can't have O_CREAT here
     if (opt & O_CREAT) {
-        vnode_ref(vn);
-        vnode_unref(vn);
         return -EINVAL;
     }
     // Can't be both (RD|WR) and EX
     if (opt & O_EXEC) {
         if (opt & O_ACCMODE) {
-            vnode_ref(vn);
-            vnode_unref(vn);
             return -EACCES;
         }
     }
 
     // TODO: check permissions here
     if (vn->type == VN_DIR) {
-        vnode_ref(vn);
-        vnode_unref(vn);
         return -EISDIR;
     }
 
@@ -720,8 +726,6 @@ int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt)
         // TODO: rewrite open() to accept struct ofile *
         // instead of vnode so that open() function of the
         // vnode can properly set of->pos
-        vnode_ref(vn);
-        vnode_unref(vn);
         fprintf(stderr, "O_APPEND not yet implemented\n");
         return -EINVAL;
     }
@@ -729,27 +733,20 @@ int vfs_open_node(struct vfs_ioctx *ctx, struct ofile *of, vnode_t *vn, int opt)
     // Check if file has to be truncated before opening it
     if (opt & O_TRUNC) {
         if (!vn->op->truncate) {
-            vnode_ref(vn);
-            vnode_unref(vn);
             return -EINVAL;
         }
 
         if ((res = vn->op->truncate(of, 0)) != 0) {
-            vnode_ref(vn);
-            vnode_unref(vn);
             return res;
         }
     }
 
     if (vn->op->open) {
         if ((res = vn->op->open(vn, opt)) != 0) {
-            vnode_ref(vn);
-            vnode_unref(vn);
             return res;
         }
     }
 
-    vnode_ref(vn);
     return 0;
 }
 

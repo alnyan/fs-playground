@@ -404,9 +404,12 @@ int main(int argc, const char **argv) {
 
     shell();
 
+    // Unmount as root
+    ioctx.gid = 0;
+    ioctx.uid = 0;
     // Cleanup
     if ((res = vfs_umount(&ioctx, "/")) != 0) {
-        fprintf(stderr, "Failed to umount /\n");
+        fprintf(stderr, "Failed to umount /: %s\n", errno_str(res));
         return -1;
     }
     testblk_dev.destroy(&testblk_dev);
