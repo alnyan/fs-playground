@@ -9,7 +9,7 @@
 
 #include <stdio.h>
 
-static struct vfs_node root_node;
+static struct vfs_node vfs_root_node;
 
 static int vfs_find(vnode_t *cwd_vnode, const char *path, vnode_t **res_vnode);
 static int vfs_access_internal(struct vfs_ioctx *ctx, int desm, mode_t mode, uid_t uid, gid_t gid);
@@ -134,12 +134,12 @@ static int vfs_vnode_access(struct vfs_ioctx *ctx, vnode_t *vn, int mode) {
 
 void vfs_init(void) {
     // Setup root node
-    strcpy(root_node.name, "[root]");
-    root_node.vnode = NULL;
-    root_node.real_vnode = NULL;
-    root_node.parent = NULL;
-    root_node.cdr = NULL;
-    root_node.child = NULL;
+    strcpy(vfs_root_node.name, "[root]");
+    vfs_root_node.vnode = NULL;
+    vfs_root_node.real_vnode = NULL;
+    vfs_root_node.parent = NULL;
+    vfs_root_node.cdr = NULL;
+    vfs_root_node.child = NULL;
 }
 
 static const char *vfs_path_element(char *dst, const char *src) {
@@ -178,12 +178,15 @@ struct vfs_node *vfs_node_create(const char *name, vnode_t *vn) {
     node->parent = NULL;
     node->child = NULL;
     node->cdr = NULL;
+    node->link = NULL;
     return node;
 }
 
 /**
  * @brief The same as vfs_find, but more internal to the VFS - it operates
  *        on VFS path tree instead of vnodes (as they have no hierarchy defined)
+ *
+ * XXX: ".." will leave you with dangling nodes in the tree
  */
 static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vfs_node **res_node) {
     if (!path || !*path) {
@@ -221,6 +224,10 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
 
     vnode_t *root_vnode = root_node->vnode;
     assert(root_vnode);
+
+    // This shouldn't happen
+    assert(root_vnode->type != VN_LNK);
+
     int res;
 
     // 1. Make sure we're either looking inside a directory
@@ -261,6 +268,30 @@ static int vfs_find_tree(struct vfs_node *root_node, const char *path, struct vf
             return res;
         }
 
+        // We've found a link and there's still some path to traverse
+        if (child_vnode->type == VN_LNK && child_path) {
+            char linkbuf[1024];
+            struct vfs_node *link_node;
+            assert(child_vnode->op && child_vnode->op->readlink);
+            child_node = vfs_node_create(path_element, child_vnode);
+
+            if ((res = child_vnode->op->readlink(child_vnode, linkbuf)) < 0) {
+                return res;
+            }
+
+            if ((res = vfs_find_tree(root_node->parent ?
+                                     root_node->parent :
+                                     &vfs_root_node, linkbuf, &link_node)) < 0) {
+                return res;
+            }
+
+            if ((res = vfs_find_tree(link_node, child_path, res_node)) < 0) {
+                return res;
+            }
+
+            return 0;
+        }
+
         // 3.3. Found some vnode, attach it to the VFS tree
         child_node = vfs_node_create(path_element, child_vnode);
 
@@ -299,11 +330,11 @@ static int vfs_find_at(vnode_t *root_vnode, const char *path, vnode_t **res_vnod
     if (!root_vnode) {
         // Root node contains no vnode - which means there's no root
         // at all
-        if (!root_node.vnode) {
+        if (!vfs_root_node.vnode) {
             return -ENOENT;
         }
 
-        res = vfs_find_tree(&root_node, path, &res_node);
+        res = vfs_find_tree(&vfs_root_node, path, &res_node);
     } else {
         assert(root_vnode->tree_node);
 
@@ -351,10 +382,10 @@ static void vfs_dump_node(struct vfs_node *node, int o) {
 }
 
 void vfs_dump_tree(void) {
-    if (!root_node.vnode) {
+    if (!vfs_root_node.vnode) {
         return;
     }
-    vfs_dump_node(&root_node, 0);
+    vfs_dump_node(&vfs_root_node, 0);
 }
 
 void vfs_vnode_path(char *path, vnode_t *vn) {
@@ -406,7 +437,7 @@ static int vfs_mount_internal(struct vfs_node *at, void *blkdev, const char *fs_
     }
 
     if (!at) {
-        at = &root_node;
+        at = &vfs_root_node;
     }
 
     vnode_t *fs_root;
@@ -448,7 +479,7 @@ int vfs_mount(struct vfs_ioctx *ctx, const char *target, void *blkdev, const cha
     vnode_t *vnode_mount_at;
     int res;
 
-    if (!root_node.vnode) {
+    if (!vfs_root_node.vnode) {
         // Root does not yet exist, check if we're mounting root:
         if (!strcmp(target, "/")) {
             printf("MOUNTING NEW ROOTFS\n");
@@ -475,7 +506,7 @@ int vfs_umount(struct vfs_ioctx *ctx, const char *target) {
     if (ctx->uid != 0) {
         return -EACCES;
     }
-    if (!root_node.vnode) {
+    if (!vfs_root_node.vnode) {
         // No root, don't even bother umounting anything
         return -ENOENT;
     }
@@ -604,12 +635,42 @@ int vfs_creat(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mod
         }
     }
 
+    vnode_ref(parent_vnode);
+
+    if (parent_vnode->type == VN_LNK) {
+        assert(parent_vnode->op);
+        assert(parent_vnode->op->readlink);
+        char lnk[1024];
+        vnode_t *vn_lnk;
+        struct vfs_node *vn_node = (struct vfs_node *) parent_vnode->tree_node;
+        struct vfs_node *vn_lnk_node;
+        assert(vn_node);
+
+        if ((res = parent_vnode->op->readlink(parent_vnode, lnk)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        if ((res = vfs_find_tree(vn_node->parent, lnk, &vn_lnk_node)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        vn_lnk = vn_lnk_node->vnode;
+        vnode_ref(vn_lnk);
+        vnode_unref(parent_vnode);
+
+        parent_vnode = vn_lnk;
+    }
+
     if (parent_vnode->type != VN_DIR) {
+        vnode_unref(parent_vnode);
         // Parent is not a directory
         return -ENOTDIR;
     }
 
     if (vfs_vnode_access(ctx, parent_vnode, W_OK) < 0) {
+        vnode_unref(parent_vnode);
         return -EACCES;
     }
 
@@ -621,11 +682,13 @@ int vfs_creat(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mod
     }
 
     if ((res = vfs_creat_internal(ctx, parent_vnode, path, mode, opt & ~O_CREAT, &vnode)) != 0) {
+        vnode_unref(parent_vnode);
         // Could not create entry
         return res;
     }
 
     vnode_ref(vnode);
+    vnode_unref(parent_vnode);
 
     if (!of) {
         vnode_unref(vnode);
@@ -657,6 +720,34 @@ int vfs_open(struct vfs_ioctx *ctx, struct ofile *of, const char *path, int mode
     }
 
     vnode_ref(vnode);
+
+    // Resolve symlink to open the resource it's pointing to
+    if (vnode->type == VN_LNK) {
+        assert(vnode->op);
+        assert(vnode->op->readlink);
+        char lnk[1024];
+        vnode_t *vn_lnk;
+        struct vfs_node *vn_node = (struct vfs_node *) vnode->tree_node;
+        struct vfs_node *vn_lnk_node;
+        assert(vn_node);
+
+        if ((res = vnode->op->readlink(vnode, lnk)) < 0) {
+            vnode_unref(vnode);
+            return res;
+        }
+
+        if ((res = vfs_find_tree(vn_node->parent, lnk, &vn_lnk_node)) < 0) {
+            vnode_unref(vnode);
+            return res;
+        }
+
+        vn_lnk = vn_lnk_node->vnode;
+        vnode_ref(vn_lnk);
+        vnode_unref(vnode);
+
+        vnode = vn_lnk;
+    }
+
     if ((res = vfs_open_node(ctx, of, vnode, opt & ~O_CREAT)) < 0) {
         vnode_unref(vnode);
         return res;
@@ -860,6 +951,9 @@ int vfs_truncate(struct vfs_ioctx *ctx, struct ofile *of, size_t length) {
     if ((of->flags & O_ACCMODE) == O_RDONLY) {
         return -EINVAL;
     }
+    if ((of->flags & O_DIRECTORY)) {
+        return -EINVAL;
+    }
     vnode_t *vn = of->vnode;
     assert(vn && vn->op);
     // XXX: should these be checked on every write?
@@ -918,6 +1012,13 @@ int vfs_unlink(struct vfs_ioctx *ctx, const char *path) {
 
     parent_vnode = node->parent->vnode;
     vnode_ref(parent_vnode);
+
+    // Can only remove a child in a directory
+    if (parent_vnode->type != VN_DIR) {
+        vnode_unref(vnode);
+        vnode_unref(parent_vnode);
+        return res;
+    }
 
     if ((res = vfs_vnode_access(ctx, parent_vnode, W_OK)) < 0) {
         vnode_unref(vnode);
@@ -1079,6 +1180,32 @@ int vfs_mkdir(struct vfs_ioctx *ctx, const char *path, mode_t mode) {
 
     vnode_ref(parent_vnode);
 
+    if (parent_vnode->type == VN_LNK) {
+        assert(parent_vnode->op);
+        assert(parent_vnode->op->readlink);
+        char lnk[1024];
+        vnode_t *vn_lnk;
+        struct vfs_node *vn_node = (struct vfs_node *) parent_vnode->tree_node;
+        struct vfs_node *vn_lnk_node;
+        assert(vn_node);
+
+        if ((res = parent_vnode->op->readlink(parent_vnode, lnk)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        if ((res = vfs_find_tree(vn_node->parent, lnk, &vn_lnk_node)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        vn_lnk = vn_lnk_node->vnode;
+        vnode_ref(vn_lnk);
+        vnode_unref(parent_vnode);
+
+        parent_vnode = vn_lnk;
+    }
+
     if (parent_vnode->type != VN_DIR) {
         // Parent is not a directory
         vnode_unref(parent_vnode);
@@ -1174,4 +1301,157 @@ int vfs_statvfs(struct vfs_ioctx *ctx, const char *path, struct statvfs *st) {
     }
 
     return fs->cls->statvfs(fs, st);
+}
+
+int vfs_readlinkat(struct vfs_ioctx *ctx, vnode_t *at, const char *path, char *buf) {
+    int res;
+    vnode_t *vnode;
+
+    if ((res = vfs_find(at, path, &vnode)) < 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+
+    if (!vnode->op || !vnode->op->readlink) {
+        vnode_unref(vnode);
+        return -EINVAL;
+    }
+    if (vnode->type != VN_LNK) {
+        vnode_unref(vnode);
+        return -EINVAL;
+    }
+
+    res = vnode->op->readlink(vnode, buf);
+    vnode_unref(vnode);
+    return res;
+}
+
+int vfs_readlink(struct vfs_ioctx *ctx, const char *path, char *buf) {
+    int res;
+    vnode_t *vnode;
+
+    if ((res = vfs_find(ctx->cwd_vnode, path, &vnode)) < 0) {
+        return res;
+    }
+
+    vnode_ref(vnode);
+
+    if (!vnode->op || !vnode->op->readlink) {
+        vnode_unref(vnode);
+        return -EINVAL;
+    }
+    if (vnode->type != VN_LNK) {
+        vnode_unref(vnode);
+        return -EINVAL;
+    }
+
+    res = vnode->op->readlink(vnode, buf);
+    vnode_unref(vnode);
+    return res;
+}
+
+int vfs_symlink(struct vfs_ioctx *ctx, const char *target, const char *linkpath) {
+    vnode_t *parent_vnode = NULL;
+    vnode_t *vnode = NULL;
+    int res;
+
+    // Check if a directory with such name already exists
+    if ((res = vfs_find(ctx->cwd_vnode, linkpath, &vnode)) == 0) {
+        vnode_ref(vnode);
+        vnode_unref(vnode);
+        return -EEXIST;
+    }
+
+    // Just copypasted this from creat()
+    if (*linkpath == '/') {
+        // Get parent vnode
+        char parent_path[1024];
+        vfs_path_parent(parent_path, linkpath);
+
+        if ((res = vfs_find(NULL, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            // Parent doesn't exist, too - error
+            return res;
+        }
+    } else {
+        char parent_path[1024];
+        vfs_path_parent(parent_path, linkpath);
+
+        if (!*parent_path) {
+            parent_path[0] = '.';
+            parent_path[1] = 0;
+        }
+
+        // Find parent
+        if ((res = vfs_find(ctx->cwd_vnode, parent_path, &parent_vnode)) != 0) {
+            printf("Parent does not exist: %s\n", parent_path);
+            return res;
+        }
+    }
+
+    vnode_ref(parent_vnode);
+
+    if (parent_vnode->type == VN_LNK) {
+        assert(parent_vnode->op);
+        assert(parent_vnode->op->readlink);
+        char lnk[1024];
+        vnode_t *vn_lnk;
+        struct vfs_node *vn_node = (struct vfs_node *) parent_vnode->tree_node;
+        struct vfs_node *vn_lnk_node;
+        assert(vn_node);
+
+        if ((res = parent_vnode->op->readlink(parent_vnode, lnk)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        if ((res = vfs_find_tree(vn_node->parent, lnk, &vn_lnk_node)) < 0) {
+            vnode_unref(parent_vnode);
+            return res;
+        }
+
+        vn_lnk = vn_lnk_node->vnode;
+        vnode_ref(vn_lnk);
+        vnode_unref(parent_vnode);
+
+        parent_vnode = vn_lnk;
+    }
+
+    if (parent_vnode->type != VN_DIR) {
+        // Parent is not a directory
+        vnode_unref(parent_vnode);
+        return -ENOTDIR;
+    }
+
+    // Need write permission
+    if ((res = vfs_vnode_access(ctx, parent_vnode, W_OK)) < 0) {
+        vnode_unref(parent_vnode);
+        return res;
+    }
+
+    printf("Path: %s\n", linkpath);
+    linkpath = vfs_path_basename(linkpath);
+
+    if (!linkpath) {
+        vnode_unref(parent_vnode);
+        return -EINVAL;
+    }
+
+    if (!parent_vnode->op || !parent_vnode->op->symlink) {
+        vnode_unref(parent_vnode);
+        return -EINVAL;
+    }
+
+    // if ((res = parent_vnode->op->mkdir(parent_vnode, linkpath, mode)) < 0) {
+    //     vnode_unref(parent_vnode);
+    //     return res;
+    // }
+    if ((res = parent_vnode->op->symlink(parent_vnode, ctx, linkpath, target)) < 0) {
+        vnode_unref(parent_vnode);
+        return res;
+    }
+
+    vnode_unref(parent_vnode);
+    return res;
 }

@@ -27,12 +27,17 @@ static int ext2_vnode_chmod(vnode_t *vn, mode_t mode);
 static int ext2_vnode_chown(vnode_t *vn, uid_t uid, gid_t gid);
 static int ext2_vnode_unlink(vnode_t *at, vnode_t *vn, const char *name);
 static int ext2_vnode_access(vnode_t *vn, uid_t *uid, gid_t *gid, mode_t *mode);
+static int ext2_vnode_readlink(vnode_t *vn, char *dst);
+static int ext2_vnode_symlink(vnode_t *at, struct vfs_ioctx *ctx, const char *name, const char *dst);
 
 struct vnode_operations ext2_vnode_ops = {
     .find = ext2_vnode_find,
     .creat = ext2_vnode_creat,
     .mkdir = ext2_vnode_mkdir,
     .destroy = ext2_vnode_destroy,
+
+    .readlink = ext2_vnode_readlink,
+    .symlink = ext2_vnode_symlink,
 
     .chmod = ext2_vnode_chmod,
     .chown = ext2_vnode_chown,
@@ -628,6 +633,113 @@ static int ext2_vnode_access(vnode_t *vn, uid_t *uid, gid_t *gid, mode_t *mode) 
     *uid = inode->uid;
     *gid = inode->gid;
     *mode = inode->type_perm & 0x1FF;
+
+    return 0;
+}
+
+static int ext2_vnode_readlink(vnode_t *vn, char *dst) {
+    assert(vn && vn->fs_data);
+    struct ext2_inode *inode = vn->fs_data;
+    fs_t *ext2 = vn->fs;
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+
+    if (inode->size_lower >= 60) {
+        char block_buffer[sb->block_size];
+        int res;
+
+        if ((res = ext2_read_inode_block(ext2, inode, 0, block_buffer)) < 0) {
+            return res;
+        }
+
+        strncpy(dst, block_buffer, inode->size_lower);
+        dst[inode->size_lower] = 0;
+    } else {
+        const char *src = (const char *) inode->direct_blocks;
+        strncpy(dst, src, inode->size_lower);
+        dst[inode->size_lower] = 0;
+    }
+
+    return 0;
+}
+
+static int ext2_vnode_symlink(vnode_t *at, struct vfs_ioctx *ctx, const char *name, const char *dst) {
+    assert(at && at->fs && at->fs_data);
+    struct ext2_inode *inode = at->fs_data;
+    fs_t *ext2 = at->fs;
+    struct ext2_extsb *sb = (struct ext2_extsb *) ext2->fs_private;
+
+    uint32_t new_ino;
+    int res;
+
+    // Allocate new inode number
+    if ((res = ext2_alloc_inode(ext2, &new_ino)) != 0) {
+        printf("Failed to allocate inode\n");
+        return res;
+    }
+
+    printf("Allocated inode %d\n", new_ino);
+
+    // Create an inode struct in memory
+    struct ext2_inode *ent_inode = (struct ext2_inode *) malloc(sb->inode_struct_size);
+
+    // Now create an entry in parents dirent list
+    if ((res = ext2_dir_add_inode(ext2, at, name, new_ino)) < 0) {
+        return res;
+    }
+
+    // Fill the inode
+    ent_inode->flags = 0;
+    ent_inode->dir_acl = 0;
+    ent_inode->frag_block_addr = 0;
+    ent_inode->gen_number = 0;
+    ent_inode->hard_link_count = 1;
+    ent_inode->acl = 0;
+    ent_inode->os_value_1 = 0;
+    memset(ent_inode->os_value_2, 0, sizeof(ent_inode->os_value_2));
+    // TODO: time support in kernel
+    ent_inode->atime = 0;
+    ent_inode->mtime = 0;
+    ent_inode->ctime = 0;
+    ent_inode->dtime = 0;
+
+    ent_inode->size_lower = strlen(dst);
+
+    if (ent_inode->size_lower <= 60) {
+        char *dst_str = (char *) ent_inode->direct_blocks;
+        memset(dst_str, 0, 60);
+
+        strncpy(dst_str, dst, ent_inode->size_lower);
+    } else {
+        char block_buffer[sb->block_size];
+        uint32_t block_no;
+
+        if ((res = ext2_alloc_block(ext2, &block_no)) < 0) {
+            return res;
+        }
+
+        memset(block_buffer, 0, sb->block_size);
+        strncpy(block_buffer, dst, sb->block_size);
+
+        if ((res = ext2_write_block(ext2, block_no, block_buffer)) < 0) {
+            return res;
+        }
+
+        memset(ent_inode->direct_blocks, 0, sizeof(ent_inode->direct_blocks));
+        ent_inode->l1_indirect_block = 0;
+        ent_inode->l2_indirect_block = 0;
+        ent_inode->l3_indirect_block = 0;
+
+        ent_inode->direct_blocks[0] = block_no;
+    }
+
+    ent_inode->uid = ctx->uid;
+    ent_inode->gid = ctx->gid;
+    ent_inode->type_perm = 0777 | EXT2_TYPE_LNK;
+
+    // Write the inode
+    if ((res = ext2_write_inode(ext2, ent_inode, new_ino)) < 0) {
+        return res;
+    }
 
     return 0;
 }

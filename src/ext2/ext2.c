@@ -15,6 +15,8 @@ enum vnode_type ext2_inode_type(struct ext2_inode *i) {
         return VN_DIR;
     case EXT2_TYPE_REG:
         return VN_REG;
+    case EXT2_TYPE_LNK:
+        return VN_LNK;
     default:
         fprintf(stderr, "Unknown file type: %x\n", v);
         abort();

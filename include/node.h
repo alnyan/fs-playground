@@ -27,7 +27,8 @@ enum vnode_type {
     VN_REG,
     VN_DIR,
     VN_BLK,
-    VN_CHR
+    VN_CHR,
+    VN_LNK
 };
 
 /**
@@ -37,6 +38,10 @@ struct vnode_operations {
     // File tree traversal, node instance operations
     int (*find) (vnode_t *node, const char *path, vnode_t **res);
     void (*destroy) (vnode_t *node);
+
+    // Symlink
+    int (*readlink) (vnode_t *node, char *path);
+    int (*symlink) (vnode_t *at, struct vfs_ioctx *ctx, const char *name, const char *dst);
 
     // File entry operations
     int (*access) (vnode_t *node, uid_t *uid, gid_t *gid, mode_t *mode);

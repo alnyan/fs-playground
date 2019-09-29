@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 
 static void vfs_node_remove(struct vfs_node *node) {
@@ -41,9 +42,15 @@ void vnode_free(vnode_t *vn) {
     assert(vn && vn->op);
     assert(!vn->refcount);
     struct vfs_node *node = vn->tree_node;
+    struct vfs_node *link_node = NULL;
 
     if (node->ismount) {
         return;
+    }
+
+    if (node->link) {
+        // Unref to where it's pointing
+        link_node = node->link;
     }
 
     if (vn->op->destroy) {
@@ -55,7 +62,12 @@ void vnode_free(vnode_t *vn) {
         vfs_node_remove(node);
     }
 
+    memset(vn, 0, sizeof(vnode_t));
     free(vn);
+
+    if (link_node) {
+        vnode_unref(link_node->vnode);
+    }
 }
 
 void vnode_ref(vnode_t *vn) {

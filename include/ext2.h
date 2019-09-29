@@ -18,6 +18,7 @@
 
 #define EXT2_TYPE_REG   ((uint16_t) 0x8000)
 #define EXT2_TYPE_DIR   ((uint16_t) 0x4000)
+#define EXT2_TYPE_LNK   ((uint16_t) 0xA000)
 
 struct ext2_sb {
     uint32_t inode_count;

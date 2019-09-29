@@ -12,6 +12,8 @@ struct vfs_node {
     vnode_t *vnode;
     // Real vnode if mountpoint
     vnode_t *real_vnode;
+    // Link destintation if symlink
+    struct vfs_node *link;
     int ismount;
     // Parent ref
     struct vfs_node *parent;
@@ -57,6 +59,11 @@ struct vfs_node *vfs_node_create(const char *name, vnode_t *vn);
 
 int vfs_mount(struct vfs_ioctx *ctx, const char *at, void *blk, const char *fs_name, const char *fs_opt);
 int vfs_umount(struct vfs_ioctx *ctx, const char *target);
+
+int vfs_readlink(struct vfs_ioctx *ctx, const char *path, char *buf);
+int vfs_readlinkat(struct vfs_ioctx *ctx, vnode_t *at, const char *path, char *buf);
+int vfs_symlink(struct vfs_ioctx *ctx, const char *target, const char *linkpath);
+
 // File ops
 int vfs_truncate(struct vfs_ioctx *ctx, struct ofile *fd, size_t length);
 int vfs_creat(struct vfs_ioctx *ctx, struct ofile *fd, const char *path, int mode, int opt);

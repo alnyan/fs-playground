@@ -71,6 +71,9 @@ static void dumpstat(char *buf, const struct stat *st) {
     case S_IFDIR:
         t = 'd';
         break;
+    case S_IFLNK:
+        t = 'l';
+        break;
     }
 
     sprintf(buf, "%c%c%c%c%c%c%c%c%c%c % 5d % 5d %u %u", t,
@@ -95,8 +98,19 @@ static int shell_stat(const char *path) {
 
     if (res == 0) {
         char buf[64];
+        char linkp[1024];
         dumpstat(buf, &st);
-        printf("%s\t%s\n", buf, path);
+
+        if ((st.st_mode & S_IFMT) == S_IFLNK) {
+            // Try to read the link
+            if ((res = vfs_readlink(&ioctx, path, linkp)) < 0) {
+                return res;
+            }
+
+            printf("%s\t%s -> %s\n", buf, path, linkp);
+        } else {
+            printf("%s\t%s\n", buf, path);
+        }
     }
 
     return res;
@@ -129,6 +143,7 @@ static int shell_ls_detail(const char *arg) {
     struct dirent *ent;
     struct stat st;
     char fullp[512];
+    char linkp[1024];
     int res;
 
     if ((res = vfs_open(&ioctx, &fd, arg, 0, O_DIRECTORY | O_RDONLY)) < 0) {
@@ -145,7 +160,17 @@ static int shell_ls_detail(const char *arg) {
         }
 
         dumpstat(fullp, &st);
-        printf("%s\t%s\n", fullp, ent->d_name);
+
+        if ((st.st_mode & S_IFMT) == S_IFLNK) {
+            // Try to read the link
+            if ((res = vfs_readlinkat(&ioctx, fd.vnode, ent->d_name, linkp)) < 0) {
+                return res;
+            }
+
+            printf("%s\t%s -> %s\n", fullp, ent->d_name, linkp);
+        } else {
+            printf("%s\t%s\n", fullp, ent->d_name);
+        }
     }
 
     vfs_close(&ioctx, &fd);
@@ -366,6 +391,37 @@ static int shell_df(const char *arg) {
     return 0;
 }
 
+static int shell_readlink(const char *arg) {
+    int res;
+    char buf[1024];
+
+    if ((res = vfs_readlink(&ioctx, arg, buf)) < 0) {
+        return res;
+    }
+
+    printf("%s\n", buf);
+
+    return 0;
+}
+
+static int shell_symlink(const char *arg) {
+    int res;
+    char buf[1024];
+
+    printf("dst = ");
+
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return -1;
+    }
+
+    size_t l = strlen(buf);
+    while (l && (!buf[l] || buf[l] == '\n')) {
+        buf[l--] = 0;
+    }
+
+    return vfs_symlink(&ioctx, buf, arg);
+}
+
 static struct {
     const char *name;
     int (*fn) (const char *arg);
@@ -386,6 +442,8 @@ static struct {
     { "access", shell_access },
     { "setuid", shell_setuid },
     { "setgid", shell_setgid },
+    { "readlink", shell_readlink },
+    { "symlink", shell_symlink },
     { "df", shell_df },
     { "me", shell_me },
     { "cd", shell_cd },
